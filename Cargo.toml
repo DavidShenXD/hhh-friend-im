@@ -1,0 +1,17 @@
+[package]
+name = "demo-im"
+version = "0.2.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "示例 IM：HHH IM 插件的最小可用骨架"
+
+[dependencies]
+# 协议包：线上类型与 JSON-RPC 编解码（按标签取一个固定版本）。
+hhh-im-protocol = { git = "https://github.com/MagicLizi/hhh-im-sdk", tag = "v0.1.0" }
+serde_json = "1"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
