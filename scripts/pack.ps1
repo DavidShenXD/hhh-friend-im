@@ -12,7 +12,7 @@ $stage = Join-Path $root 'dist/stage'
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item hhh-im-provider.json, logo.svg $stage
-Copy-Item target/release/demo-im.exe $stage
+Copy-Item target/release/friend-im.exe $stage
 $pack = @($stage, '--target', 'windows-x64', '--out', (Join-Path $root 'dist'), '--notes', 'notes.md')
 if ($Publish) { $pack += '--publish' }
 hhh-im-pack @pack

@@ -10,5 +10,5 @@ cargo build --release
 rm -rf dist/stage
 mkdir -p dist/stage
 cp hhh-im-provider.json logo.svg dist/stage/
-cp target/release/demo-im dist/stage/
+cp target/release/friend-im dist/stage/
 hhh-im-pack dist/stage --out dist --notes notes.md "$@"

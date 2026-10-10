@@ -1,61 +1,57 @@
-# HHH IM 插件模板
+# Friend-IM
 
-给 HHH 写一个 IM 插件的起点：清单、标志、能跑的插件骨架、打包脚本、给 agent 的规范，都在这里。
+端到端加密的 IM，以插件形式接入 HHH 的 Friend（按 [HHH IM 插件协议](https://github.com/MagicLizi/hhh-im-sdk)）：消息、图片、文件、群名和群头像只有成员的电脑能解开，**运行服务器的人（包括我们自己）也看不到**。
 
-HHH 的 IM 层只做统一的界面和一个统一的插座（HHH-IM-Protocol）。插件是一个子进程：和自己的平台说话、把平台的格式翻成统一格式、
-声明自己能做什么和要用户填什么；聊天记录、凭据、配置都交给 HHH。
+> 状态：开发中，还不能用。
 
-## 五分钟起一个插件
+## 用起来是什么样
 
-1. 用这个模板建仓库（GitHub 上点 “Use this template”），克隆下来。
-2. 装工具（自检与打包）：
+- 在 Friend 的「设置 → IM」里安装 Friend-IM，装上就用 Friend 当前登录的 Cindy 账号自动登录、自动开通，不用另外注册。
+- 第一台电脑开通时会给你一份**恢复密钥**，所有电脑都丢了时只有它能找回聊天记录。
+- 换一台电脑：在已登录的电脑上批准它（输入新电脑上显示的 4 个词），或输入恢复密钥；批准后能看到全部历史。
+- 加好友用好友链接（链接里带着身份指纹，加好友的同时就核对了是本人）；能建群、邀请人、移出成员。
+- 伙伴可以像在其它 IM 里一样在会话里帮你回复。
 
-   ```sh
-   cargo install --git https://github.com/MagicLizi/hhh-im-sdk --tag v0.1.0 hhh-im-protocol --features transport,package
-   ```
+## 安全模型
 
-3. 改清单 `hhh-im-provider.json`：`id`（发布后不能改）、`name`、`publisher`、`source`（换成你的仓库）。
-4. 打包并自检：
+- 每个账号一把账号钥匙，按每台电脑和恢复密钥各加密保存一份；每个会话一组按代轮换的会话钥匙，按每个成员的账号钥匙加密后存在服务器上（Keybase 式）。
+- 加电脑、加群成员都要已有电脑或成员签名，插件自己核对；服务器私自加人会被发现并提醒。
+- 新电脑要已有电脑批准：新电脑显示 4 个词，在旧电脑上输入，两边跑 SPAKE2 握手（与 magic-wormhole 同样的做法），服务器在中间换不了新电脑的钥匙。
+- 只用标准构造，不自创算法：封装用 HPKE（RFC 9180，X25519 + HKDF-SHA256 + ChaCha20-Poly1305），消息与群资料用 XChaCha20-Poly1305，
+  文件用分段的 ChaCha20-Poly1305，签名用 Ed25519。用到的库里 `hpke`、`spake2` 没有第三方审计；对外开放使用前要做一次加密层的外部审计。
+- **服务器看得到的**：谁和谁有私聊、每个群有哪些成员；消息的发送时间和大小、撤回了哪一条；文件的大小；名字（来自 Cindy）；
+  每个账号有几台电脑、电脑名、加入和最近在线的时间。**看不到的**：消息内容、图片、文件内容和文件名、群名、群头像、群简介、回复的是哪一条。
+- 所有电脑和恢复密钥都丢了，以前的消息谁也找不回来。
 
-   ```sh
-   powershell -File scripts/pack.ps1     # Windows
-   scripts/pack.sh                       # macOS / Linux
-   hhh-im-check dist/stage/hhh-im-provider.json
-   ```
+## 仓库
 
-5. 在 HHH 里试：设置 → IM → 添加 IM → 文件夹，选 `dist/stage`。会多一个“示例 IM”，里面一个示例群，发什么它回“收到「…」”。
+- 本仓库：
+  - 根目录 `friend-im`：插件程序（按 [HHH IM 插件模板](https://github.com/MagicLizi/hhh-im-plugin-template) 的结构），把客户端库翻成 HHH 插件协议（还在写）。
+  - `core/`（`friend-im-core`）：插件和服务器共用的部分——钥匙、签名链、封装、消息与文件加密、新电脑批准握手、恢复密钥的写法、和服务器之间的格式。不碰网络和文件，以后手机端也能原样用。
+  - `client/`（`friend-im-client`）：客户端库——连服务器、核对签名链、钥匙缓存、同步与断线重连、文件分段上传下载。不认识 HHH 协议。
+- 服务器：[hhh-friend-im-server](https://github.com/MagicLizi/hhh-friend-im-server)（它的端到端测试直接用本仓库的客户端库）。
 
-然后照 `src/main.rs` 的注释和 `AGENTS.md` 换成你的平台。
+## 开发
 
-## 在 HHH 里怎么试
+按 `AGENTS.md` 的规矩写（插件只做和服务器说话、翻成统一格式、声明能力；聊天记录、凭据、配置交给 HHH）。
 
-| 方式 | 什么时候用 |
-|---|---|
-| 添加 IM → 文件夹 | 开发时：选 `dist/stage` 或你的插件文件夹 |
-| 添加 IM → 安装包 | 选 `dist/` 里的 `.hhhim`，和用户装的一样 |
-| 添加 IM → 仓库 | 发布后：填你的仓库地址，HHH 读最新版本、下载这台电脑的包 |
-| 卡片「管理 → 从文件更新」 | 已经装过，换成新打的包或文件夹 |
+```sh
+cargo test -p friend-im-core -p friend-im-client   # 共用部分与客户端库（含锁住线上格式的夹具 core/tests/format_v1.rs）
+```
 
-## 发版本
+服务器与客户端库连起来的端到端测试在服务器仓库（`cargo test`），两个仓库并排放即可。
 
-1. 改清单与 `Cargo.toml` 的 `version`，写 `notes.md`（更新说明，Markdown）。
-2. 提交，打标签 `v<版本>` 推上去。
-3. 令牌放环境变量 `HHH_IM_PUBLISH_TOKEN`，跑 `scripts/pack.ps1 -Publish`（或 `scripts/pack.sh --publish`）。
+打包插件：
 
-用户打开 HHH 的设置 → IM 时会看到“有新版本”，点一下就更新。详细规矩见 [hhh-im-sdk 的发版本规范](https://github.com/MagicLizi/hhh-im-sdk/blob/main/docs/release.md)。
+```sh
+cargo install --git https://github.com/MagicLizi/hhh-im-sdk --tag v0.1.0 hhh-im-protocol --features transport,package
+powershell -File scripts/pack.ps1     # Windows
+scripts/pack.sh                       # macOS / Linux
+hhh-im-check dist/stage/hhh-im-provider.json
+```
 
-## 给 agent 的规范
-
-用任何 agent 打开这个仓库都按同一套规矩写插件：
-
-- `AGENTS.md`：规则正本（先读协议、清单怎么填、插件只做什么、改完必须自检并在 HHH 里试、怎么发版本）。
-- `CLAUDE.md`：只有一行，指到 `AGENTS.md`。
-- skill「开发插件」与「发版本」：`.agents/skills/` 与 `.claude/skills/`（内容相同）。
-
-## 本仓库的版本
-
-这个模板本身也按规范发布示例插件“示例 IM”的版本，可以在 HHH 里用「添加 IM → 仓库」填 `https://github.com/MagicLizi/hhh-im-plugin-template` 试装与更新。
+在 HHH 里试：设置 → IM → 添加 IM → 文件夹，选 `dist/stage`。发版本按 [发版本规范](https://github.com/MagicLizi/hhh-im-sdk/blob/main/docs/release.md)。
 
 ## 许可证
 
-[MIT](LICENSE)。用这个模板起的插件，许可证由你自己定（改掉 `LICENSE` 与 `Cargo.toml` 的 `license`）。
+[MIT](LICENSE)。

@@ -1,10 +1,15 @@
+[workspace]
+# 根目录是插件程序；core 是两边共用的部分，client 是连服务器的客户端库。
+members = ["core", "client"]
+resolver = "3"
+
 [package]
-name = "demo-im"
-version = "0.2.0"
+name = "friend-im"
+version = "0.0.1"
 edition = "2024"
 publish = false
 license = "MIT"
-description = "示例 IM：HHH IM 插件的最小可用骨架"
+description = "Friend-IM：端到端加密的 HHH IM 插件"
 
 [dependencies]
 # 协议包：线上类型与 JSON-RPC 编解码（按标签取一个固定版本）。

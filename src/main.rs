@@ -1,4 +1,5 @@
-//! 示例 IM：HHH IM 插件的最小可用骨架（HHH-IM-Protocol v1，规范见 hhh-im-sdk 的 docs/protocol-v1.md）。
+//! Friend-IM 插件（骨架）：现在还是插件模板的示例逻辑，只把编号与名字换成了 Friend-IM；
+//! 真正的实现（登录、加密、收发）按实现方案分阶段替换。HHH-IM-Protocol v1，规范见 hhh-im-sdk 的 docs/protocol-v1.md。
 //!
 //! 插件是一个子进程：HHH 从标准输入一行一条发 JSON-RPC 请求，插件从标准输出一行一条回；日志走 `log/write` 通知，
 //! 不要往标准输出打别的东西。这个示例：
@@ -117,7 +118,7 @@ impl Plugin {
         match method {
             "initialize" => Ok(json!({
                 "protocolVersion": 1,
-                "provider": { "id": "demo-im", "name": "示例 IM", "version": env!("CARGO_PKG_VERSION") },
+                "provider": { "id": "friend-im", "name": "Friend-IM", "version": env!("CARGO_PKG_VERSION") },
                 "platform": {
                     "avatarShape": "rounded",
                     "history": "none",
@@ -148,7 +149,7 @@ impl Plugin {
                 serde_json::to_value(SendOutcome::Accepted { message: Box::new(sent) })
                     .map_err(|_| RpcError::from_kind(ErrorKind::ProtocolError, "发送结果写不出"))
             }
-            other => Err(RpcError::from_kind(ErrorKind::Unsupported, format!("示例 IM 不支持 {other}"))),
+            other => Err(RpcError::from_kind(ErrorKind::Unsupported, format!("Friend-IM 还不支持 {other}"))),
         }
     }
 }

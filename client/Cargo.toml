@@ -1,0 +1,21 @@
+[package]
+name = "friend-im-client"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "Friend-IM 客户端库：连服务器、核对签名链、钥匙缓存、同步与断线重连。不认识 HHH 协议。"
+
+[dependencies]
+friend-im-core = { path = "../core" }
+tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+zeroize = "1.9"

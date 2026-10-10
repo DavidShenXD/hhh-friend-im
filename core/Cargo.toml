@@ -1,0 +1,23 @@
+[package]
+name = "friend-im-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "Friend-IM 两边共用的部分：钥匙、签名链、封装、消息与文件加密、新电脑批准握手、和服务器之间的格式。不碰网络和文件。"
+
+[dependencies]
+ed25519-dalek = { version = "3", features = ["zeroize"] }
+chacha20poly1305 = "0.11"
+hkdf = "0.13"
+hmac = "0.13"
+sha2 = "0.11"
+hpke = { version = "0.14", default-features = false, features = ["alloc", "x25519", "chacha", "getrandom"] }
+spake2 = "0.4"
+getrandom = "0.3"
+zeroize = { version = "1.9", features = ["derive"] }
+subtle = "2.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+thiserror = "2"

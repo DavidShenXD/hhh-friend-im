@@ -1,0 +1,45 @@
+{
+  "uid": "4MgTT9j2v4ESiAY17iEDmg",
+  "device_id": "QeXFwBA29Vbm-Mv7kvGYAg",
+  "eldest_link": {
+    "body": "eyJ2IjoxLCJ1aWQiOiI0TWdUVDlqMnY0RVNpQVkxN2lFRG1nIiwiZXBvY2giOjAsInNlcSI6MSwiY3RpbWVfbXMiOjE3MDAwMDAwMDAwMDAsImNoYW5nZSI6eyJ0eXBlIjoiZWxkZXN0IiwiZGV2aWNlIjp7ImtleXMiOnsic2lnbiI6IjBFcXlNblFydEtzNkUyaTlSaFhrNXRBaVNyY2FBV3V2aFNDak1zbDNoemMiLCJlbmMiOiJENnBvVHRLSVo3bF9TbW90N2wzNHpwZE9kcmNCamo4aW9jVFBKbmhYRHlBIn0sIm5hbWUiOiLlpLnlhbfnlLXohJEifSwicmVjb3ZlcnkiOnsic2lnbiI6Im1MWUZsRHlTTTdmZ0ZsS0FhUnk2ZFo1NFBaRmx6Nnl1cFlFTEp1Y1Z4N2MiLCJlbmMiOiIyRjQxbGF4UHViNHc2WW9qLVBRUVhJZXNqSXNUazRGZHV3SHF4Vm5KaDJVIn0sInJlY292ZXJ5X3Byb29mIjoiR0xlRG96blFNVHpxZDVpdW9aSktPMWlHLW9MOC1CTmswZ3RqdmhVTmpwQjFzLVZDNS1kQWdmWV9HdXZxX0YwbmdUR1JmSHNsWTZLdFR1NFF3Sk5wQ0EiLCJrZXkiOnsiZ2VuZXJhdGlvbiI6MSwiZW5jIjoic2JLcmgzeFNzQkpRdnVkRHpXcWVrcm0xU3ptZVh1NXlSbnhBZjd0SUt3dyJ9fX0",
+    "by": "QeXFwBA29Vbm-Mv7kvGYAg",
+    "sig": "E811mbYAZUNPDm6u7hoj_il9W0-yHJLfEYq9cBnmQ4VOB1s0NY1fl3IGfLfD6d5667GbTdU6Ed85zgNklB5kBQ"
+  },
+  "eldest_hash": "_EDGDa15L8tG1YwVwTO7e_0T5passPVaZq4lNm_LFlU",
+  "recovery_words": "fog spot notable regret pizza coffee harvest ensure fog spot notable reflect",
+  "recovery_groups": "B9D5-MPJT-B9D5-MPJT-B9D5-MPJT-B8AQ",
+  "hello_frame": "{\"id\":1,\"req\":{\"op\":\"hello\",\"protocol\":1,\"auth\":{\"type\":\"session\",\"token\":\"iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg\"},\"device\":{\"sign\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc\",\"enc\":\"D6poTtKIZ7l_Smot7l34zpdOdrcBjj8iocTPJnhXDyA\"},\"name\":\"夹具电脑\",\"sig\":\"6k8KPL9Qd_27uG7VOrqzs6Zau1s5l3rRNkRe_DtNbBeWgowtKGVsQfqUjjNHM3zhgyJ7sVxIQ1_cTMkL56N9AQ\"}}",
+  "envelope": {
+    "conv": "VVVVVVVVVVVVVVVVVVVVVQ",
+    "id": "qqqqqqqqqqqqqqqqqqqqqg",
+    "generation": 1,
+    "sender": "4MgTT9j2v4ESiAY17iEDmg",
+    "sender_eldest": "_EDGDa15L8tG1YwVwTO7e_0T5passPVaZq4lNm_LFlU",
+    "device": "QeXFwBA29Vbm-Mv7kvGYAg",
+    "ct": "vdDnV89-pwVNDH-n2sLSzokHQS8fCbBHOm_oSBzTSvruoKiGehss_ndZEBKO6YXrSbWnEZsnsbV4CHJSqPA2A2oId-qgNsGKUg8854YsfXPluHsyUSVG6ccZt3V7NgBf2hsuy-jkFNRetC5n4keOIo48p5PpJjIciFN05vOblipqY_w_26yR3T-1lPVEU0qR8Z8Af60TLIXctmPxA6oQ4CThdIr17xtOxLghdKR6bJcgHXCj9Yc6npFms4rLzx5v3azd3JRmUMGjNun7GNcfSeAvQeWNJxlSBILaBFWMKJZe3ueXHyh1AASqpAeUEWyUX6pHeuTnQNuVu8BwIuuQHoV1J8dI795Azn_sXbm0wiiGT03gipiUWRWLeQ8"
+  },
+  "message": {
+    "v": 1,
+    "ctime_ms": 1700000000123,
+    "content": {
+      "type": "post",
+      "parts": [
+        {
+          "type": "text",
+          "text": "你好，夹具"
+        },
+        {
+          "type": "mention",
+          "everyone": true
+        }
+      ],
+      "reply_to": "mZmZmZmZmZmZmZmZmZmZmQ"
+    }
+  },
+  "account_seed_box": {
+    "enc": "bDnK-4Pt1raIK_aWbT7pxZKviyTNExhYbMyRuBK160g",
+    "ct": "K5DJeTvZ35v5JddKOfehS3E210xo1cJ5d0evQ6Ll3s3HPuXCXziTCoCT2fif8-3u"
+  },
+  "file_sealed": "m4KGaDKt74BLf2o1OaEH4ATVjgAKncY6i8_e-puz7vZPJCYJm2Jnf1E-PfgeFn38rt3VFt4LbQ"
+}
