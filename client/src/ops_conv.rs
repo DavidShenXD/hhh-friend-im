@@ -12,7 +12,7 @@ use friend_im_core::ids::{ConvId, InviteId, MsgId, Uid};
 use friend_im_core::keys::{ConvSeed, InviteSecret, conv_seed_info};
 use friend_im_core::limits;
 use friend_im_core::message::{Content, Envelope, MESSAGE_VERSION, MessageBody, Sender};
-use friend_im_core::wire::{ConvKeyBundle, ConvSummary, ErrorCode, InviteSeed, MemberKeyBox, Request, Response};
+use friend_im_core::wire::{ConvActivity, ConvKeyBundle, ConvSummary, ErrorCode, InviteSeed, MemberKeyBox, Request, Response};
 
 use crate::conn::Conn;
 use crate::error::{ClientError, Result};
@@ -487,13 +487,17 @@ impl State {
     }
 
     /// 往前翻一页历史：消息解开核对，会话签名链里同一段的系统提示合进来，按日志序号从新到旧。
-    pub async fn history(&mut self, conn: &Conn, conv: &ConvId, before: Option<u64>, limit: u32) -> Result<HistoryPage> {
+    /// `window` 是服务器时间的范围（毫秒，两端都含、可以只给一端）：消息按服务器时间筛，系统提示按签它的人写的时间筛。
+    pub async fn history(&mut self, conn: &Conn, conv: &ConvId, before: Option<u64>, limit: u32, window: (Option<i64>, Option<i64>)) -> Result<HistoryPage> {
         self.require_active()?;
+        let (since_ms, until_ms) = window;
         let Response::Messages { items, more } = conn
             .request(Request::History {
                 conv: conv.clone(),
                 before,
                 limit: limit.clamp(1, limits::HISTORY_PAGE_MAX),
+                since_ms,
+                until_ms,
             })
             .await?
         else {
@@ -514,15 +518,26 @@ impl State {
             }
         }
         let record = &self.book.convs[conv];
+        let in_window = |ms: i64| since_ms.is_none_or(|s| ms >= s) && until_ms.is_none_or(|u| ms <= u);
         for (link, log) in &record.links {
             if *log > lower
                 && *log < upper
                 && let Some(notice) = Notice::from_link(conv, link, *log)
+                && in_window(notice.ctime_ms)
             {
                 page.push(HistoryItem::Notice(notice));
             }
         }
         page.sort_by_key(|item| std::cmp::Reverse(item.log()));
         Ok(HistoryPage { items: page, more })
+    }
+
+    /// 会话活动：自己所在的会话里 `since_ms` 起有消息的，每个会话最早、最新一条的服务器时间（不解任何内容）。
+    pub async fn activity(&mut self, conn: &Conn, since_ms: i64) -> Result<Vec<ConvActivity>> {
+        self.require_active()?;
+        match conn.request(Request::Activity { since_ms }).await? {
+            Response::Activity { items } => Ok(items),
+            _ => Err(ClientError::protocol("回执不对")),
+        }
     }
 }

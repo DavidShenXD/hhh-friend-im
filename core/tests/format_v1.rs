@@ -144,3 +144,16 @@ fn version_1_formats_have_not_drifted() {
     assert_eq!(opened.as_slice(), account_seed().as_bytes());
     assert_eq!(file::open_all(&FILE_KEY, &fixture.file_sealed.0).unwrap().as_slice(), FILE_PLAIN.as_bytes(), "存好的文件解不开了");
 }
+
+/// 第 1 版之后加的可选字段（历史请求的时间窗口）：不带时与第 1 版的帧一字不差，第 1 版的帧照样读得懂。
+#[test]
+fn later_optional_fields_keep_version_1_frames() {
+    let conv = conv();
+    let old = format!(r#"{{"op":"history","conv":"{conv}","before":5,"limit":50}}"#);
+    let plain = Request::History { conv: conv.clone(), before: Some(5), limit: 50, since_ms: None, until_ms: None };
+    assert_eq!(serde_json::to_string(&plain).unwrap(), old, "不带时间窗口的历史请求变了");
+    assert_eq!(serde_json::from_str::<Request>(&old).unwrap(), plain, "第 1 版的历史请求读不懂了");
+    let windowed = Request::History { conv, before: None, limit: 50, since_ms: Some(1_700_000_000_000), until_ms: Some(1_700_000_000_999) };
+    let text = serde_json::to_string(&windowed).unwrap();
+    assert_eq!(serde_json::from_str::<Request>(&text).unwrap(), windowed);
+}

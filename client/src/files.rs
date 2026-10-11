@@ -181,6 +181,82 @@ async fn progress(client: &Client, end: &Endpoint) -> Result<u64> {
     upload_offset(&response).ok_or_else(|| ClientError::protocol("进度回执缺少位置"))
 }
 
+/// 一次 [`read_range`] 至多读多少明文：插件协议一段至多 1 MiB，这里留同样的上限，免得一次占太多内存。
+pub(crate) const RANGE_MAX: u64 = 1024 * 1024;
+
+/// 只读明文的 `offset` 起 `len` 字节：算出盖住它的加密块，`GET` 带 `Range` 只取这几块，从那一块的段号开始逐块解开，
+/// 再切出要的部分。块里的段号与“最后一段”标记都签在随机数里，服务器给错了块、截短或换了内容都解不开。
+pub(crate) async fn read_range(client: &Client, file: &FileRef, offset: u64, len: u64) -> Result<Vec<u8>> {
+    file.check()?;
+    if len > RANGE_MAX {
+        return Err(ClientError::state("一次至多读 1 MiB"));
+    }
+    let end = offset.saturating_add(len).min(file.size);
+    if offset >= end {
+        return Ok(Vec::new());
+    }
+    let chunks = file.size.div_ceil(CHUNK_PLAIN as u64).max(1);
+    let first = offset / CHUNK_PLAIN as u64;
+    let last = (end - 1) / CHUNK_PLAIN as u64;
+    let start = first * CHUNK_SEALED as u64;
+    let stop = ((last + 1) * CHUNK_SEALED as u64).min(file::sealed_len(file.size));
+    let ep = endpoint(client, &file.id).await?;
+    let mut failures = 0;
+    let sealed = loop {
+        let outcome = async {
+            let response = client
+                .inner
+                .http
+                .get(&ep.url)
+                .header(AUTHORIZATION, &ep.bearer)
+                .header(RANGE, format!("bytes={start}-{}", stop - 1))
+                .timeout(PART_TIMEOUT)
+                .send()
+                .await
+                .map_err(|error| {
+                    tracing::info!(%error, "按段读文件的请求失败");
+                    None
+                })?;
+            if response.status() != StatusCode::PARTIAL_CONTENT {
+                tracing::info!(status = %response.status(), "按段读文件被拒");
+                let fatal = response.status().is_client_error();
+                return Err(fatal.then(|| transfer(format!("服务器拒绝：HTTP {}", response.status()))));
+            }
+            let body = response.bytes().await.map_err(|error| {
+                tracing::info!(%error, "按段读文件中途断了");
+                None
+            })?;
+            if body.len() as u64 != stop - start {
+                tracing::info!(got = body.len(), want = stop - start, "按段读文件给的长度不对");
+                return Err(None);
+            }
+            Ok(body)
+        }
+        .await;
+        match outcome {
+            Ok(body) => break body,
+            Err(Some(error)) => return Err(error),
+            Err(None) => {}
+        }
+        failures += 1;
+        if failures > RETRIES {
+            return Err(transfer("按段读文件多次失败"));
+        }
+        tokio::time::sleep(Duration::from_millis(500 * u64::from(failures))).await;
+    };
+    let mut decryptor = Decryptor::starting_at(&file.key.0, first);
+    let mut plain = Vec::with_capacity(((last - first + 1) * CHUNK_PLAIN as u64) as usize);
+    for (i, block) in sealed.chunks(CHUNK_SEALED).enumerate() {
+        plain.extend_from_slice(&decryptor.open_chunk(block, first + i as u64 + 1 == chunks)?);
+    }
+    let skip = (offset - first * CHUNK_PLAIN as u64) as usize;
+    let want = (end - offset) as usize;
+    if plain.len() < skip + want {
+        return Err(ClientError::Core(friend_im_core::CoreError::Decrypt));
+    }
+    Ok(plain[skip..skip + want].to_vec())
+}
+
 /// 下载并解密到 `out`：每收齐一段密文就解开写出去，被改过、截短、调换的文件在这里报错。
 pub(crate) async fn download(client: &Client, file: &FileRef, out: &mut impl Write) -> Result<()> {
     file.check()?;

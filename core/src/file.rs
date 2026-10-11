@@ -137,6 +137,15 @@ impl Decryptor {
         }
     }
 
+    /// 从第 `chunk` 段（从 0 起）开始解：按段读文件中间的一部分用（断点续读、只取一段）。
+    /// 段号进了每段的随机数，从错的段号开始解，第一段就报 [`CoreError::Decrypt`]。
+    pub fn starting_at(key: &[u8; 32], chunk: u64) -> Self {
+        Self {
+            counter: chunk,
+            ..Self::new(key)
+        }
+    }
+
     /// 解密一段；调用方按 [`CHUNK_SEALED`] 切段，最后一段传 `last = true`。
     /// 被调换、截短、拼接或改动的密文在这里报 [`CoreError::Decrypt`]。
     pub fn open_chunk(&mut self, sealed: &[u8], last: bool) -> Result<Zeroizing<Vec<u8>>> {
@@ -202,6 +211,20 @@ mod tests {
             assert_eq!(plain_len(sealed.len() as u64), Some(size as u64), "size {size}");
             assert_eq!(open_all(&key, &sealed).unwrap().as_slice(), plain.as_slice(), "size {size}");
         }
+    }
+
+    #[test]
+    fn decrypting_from_a_middle_chunk_needs_the_right_index() {
+        let key = generate_key();
+        let plain: Vec<u8> = (0..3 * CHUNK_PLAIN + 7).map(|i| i as u8).collect();
+        let sealed = seal_all(&key, &plain);
+        let second = &sealed[CHUNK_SEALED..2 * CHUNK_SEALED];
+        assert_eq!(Decryptor::starting_at(&key, 1).open_chunk(second, false).unwrap().as_slice(), &plain[CHUNK_PLAIN..2 * CHUNK_PLAIN]);
+        assert!(Decryptor::starting_at(&key, 2).open_chunk(second, false).is_err());
+        let tail = &sealed[3 * CHUNK_SEALED..];
+        assert_eq!(Decryptor::starting_at(&key, 3).open_chunk(tail, true).unwrap().as_slice(), &plain[3 * CHUNK_PLAIN..]);
+        // 拿中间一段冒充最后一段也不行。
+        assert!(Decryptor::starting_at(&key, 1).open_chunk(second, true).is_err());
     }
 
     #[test]

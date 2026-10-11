@@ -360,7 +360,19 @@ impl Client {
 
     /// 往前翻一页历史（`before` 为空从最新开始）。
     pub async fn history(&self, conv: &ConvId, before: Option<u64>, limit: u32) -> Result<HistoryPage> {
-        self.call(async |s, c| s.history(c, conv, before, limit).await).await
+        self.history_in(conv, before, limit, None, None).await
+    }
+
+    /// 同 [`Client::history`]，只要服务器时间在 `since_ms`～`until_ms` 之间的（毫秒，两端都含，可以只给一端）。
+    /// 系统提示没有服务器时间，按签它的人写的时间筛。
+    pub async fn history_in(&self, conv: &ConvId, before: Option<u64>, limit: u32, since_ms: Option<i64>, until_ms: Option<i64>) -> Result<HistoryPage> {
+        self.call(async |s, c| s.history(c, conv, before, limit, (since_ms, until_ms)).await).await
+    }
+
+    /// 会话活动：自己所在的会话里 `since_ms` 起有消息的，每个会话最早、最新一条的服务器时间，按最新的从新到旧。
+    /// 只有会话编号和时间，用来尽早发现有新消息的会话（不解内容、不占发送额度）。
+    pub async fn activity(&self, since_ms: i64) -> Result<Vec<friend_im_core::wire::ConvActivity>> {
+        self.call(async |s, c| s.activity(c, since_ms).await).await
     }
 
     /// 文件、图片：见 [`crate::files`]。
@@ -371,6 +383,12 @@ impl Client {
     /// 下载并解密到 `out`。
     pub async fn download(&self, file: &FileRef, out: &mut impl std::io::Write) -> Result<()> {
         crate::files::download(self, file, out).await
+    }
+
+    /// 只读文件明文的 `offset` 起 `len` 字节（读到文件尾就少给）：只取盖住这一段的加密块，逐块核对后解开。
+    /// 给按段读、断了接着读的调用方用（插件的资源读取）；整份下载用 [`Client::download`]。
+    pub async fn read_range(&self, file: &FileRef, offset: u64, len: u64) -> Result<Vec<u8>> {
+        crate::files::read_range(self, file, offset, len).await
     }
 }
 

@@ -360,6 +360,17 @@ pub enum Request {
         before: Option<u64>,
         /// 最多几条。
         limit: u32,
+        /// 只要服务器时间不早于它的（毫秒，含）。第 1 版之后加的可选字段：不带时与旧帧一字不差。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since_ms: Option<i64>,
+        /// 只要服务器时间不晚于它的（毫秒，含）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until_ms: Option<i64>,
+    },
+    /// 会话活动：自己所在的会话里 `since_ms` 起有消息的，每个会话给最早、最新一条的服务器时间（不碰内容）。
+    Activity {
+        /// 从这个时间起（毫秒，含）。
+        since_ms: i64,
     },
     /// 补拉日志序号大于 `since` 的事件。
     Sync {
@@ -395,6 +406,17 @@ pub struct ConvEntry {
     pub log: u64,
     /// 这一环。
     pub link: ConvLink,
+}
+
+/// 一个会话在一段时间里的活动（[`Request::Activity`] 的结果）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConvActivity {
+    /// 会话。
+    pub conv: ConvId,
+    /// 这段时间里最早一条消息的服务器时间（毫秒）。
+    pub first_ms: i64,
+    /// 最新一条的服务器时间（毫秒）。
+    pub latest_ms: i64,
 }
 
 /// 这台电脑的状态。
@@ -672,6 +694,11 @@ pub enum Response {
         items: Vec<StoredMessage>,
         /// 是否还有更早的。
         more: bool,
+    },
+    /// 会话活动（按最新一条从新到旧）。
+    Activity {
+        /// 每个会话一项。
+        items: Vec<ConvActivity>,
     },
     /// 一批同步事件。
     SyncBatch {
