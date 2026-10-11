@@ -242,6 +242,8 @@ impl State {
                         conv: msg.env.conv.clone(),
                         id: msg.env.id.clone(),
                         log,
+                        ts_ms: msg.ts_ms,
+                        sender: msg.env.sender.clone(),
                         reason: error.to_string(),
                     });
                 }

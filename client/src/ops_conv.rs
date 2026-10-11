@@ -513,6 +513,8 @@ impl State {
                 Err(error) => page.push(HistoryItem::Rejected {
                     id: msg.env.id.clone(),
                     log: msg.log,
+                    ts_ms: msg.ts_ms,
+                    sender: msg.env.sender.clone(),
                     reason: error.to_string(),
                 }),
             }

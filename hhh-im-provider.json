@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "friend-im",
   "name": "Friend-IM",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "command": "friend-im",
   "os": ["windows", "macos", "linux"],
   "logo": "logo.svg",

@@ -5,16 +5,38 @@ resolver = "3"
 
 [package]
 name = "friend-im"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 publish = false
 license = "MIT"
 description = "Friend-IM：端到端加密的 HHH IM 插件"
 
+# 库里是协议服务（测试在进程内驱动它），程序只是把它接到标准输入输出上。
+[lib]
+name = "friend_im"
+path = "src/lib.rs"
+
+[[bin]]
+name = "friend-im"
+path = "src/main.rs"
+
 [dependencies]
-# 协议包：线上类型与 JSON-RPC 编解码（按标签取一个固定版本）。
-hhh-im-protocol = { git = "https://github.com/MagicLizi/hhh-im-sdk", tag = "v0.1.0" }
+# 连服务器、核对、加解密都在客户端库里；插件只把它翻成 HHH 的插件协议。
+friend-im-client = { path = "client" }
+# 协议包：线上类型与 JSON-RPC 编解码（按标签取一个固定版本；v0.2.0 有会话发现等 v12 的类型）。
+hhh-im-protocol = { git = "https://github.com/MagicLizi/hhh-im-sdk", tag = "v0.2.0" }
+# 异步运行时：读标准输入、并发处理宿主的请求、推送队列。
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "io-std", "io-util", "sync", "time", "fs"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 资源与上传的数据按协议写成标准 base64；上传的摘要用 sha256 核对。
+base64 = "0.22"
+sha2 = "0.11"
+# 日志交给宿主（log/write）。
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "registry"] }
+# 发图片时读宽高（只读文件头，不解码图片）。
+imagesize = "0.14"
 
 [profile.release]
 strip = true

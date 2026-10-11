@@ -224,6 +224,10 @@ pub enum Update {
         id: MsgId,
         /// 日志序号。
         log: u64,
+        /// 服务器收到的时间（毫秒）。
+        ts_ms: i64,
+        /// 信封上写的发送账号（没验过，只用来把提示放在对的人名下）。
+        sender: Uid,
         /// 原因（不含内容）。
         reason: String,
     },
@@ -289,6 +293,10 @@ pub enum HistoryItem {
         id: MsgId,
         /// 日志序号。
         log: u64,
+        /// 服务器收到的时间（毫秒）。
+        ts_ms: i64,
+        /// 信封上写的发送账号（没验过，只用来把提示放在对的人名下）。
+        sender: Uid,
         /// 原因。
         reason: String,
     },
