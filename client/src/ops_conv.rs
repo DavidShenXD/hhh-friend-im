@@ -369,8 +369,12 @@ impl State {
             return Err(ClientError::protocol("回执不对"));
         };
         // 还不是成员，取不到会话签名链：用邀请回执里的那一份，同样一环一环验。
-        if !self.book.convs.contains_key(&conv) {
-            for entry in &entries {
+        // 退过群的人本地还留着一份，但停在退群那一环（之后的换代、新邀请都收不到），只接它之后的环；
+        // 不补齐就会在旧的链头上签加入，服务器按序号和上一环摘要拒掉。
+        let known = self.book.convs.get(&conv).map(|r| r.state.seq);
+        for entry in &entries {
+            let seq = entry.link.parse().map_err(|e| ClientError::verify(format!("会话签名链：{e}")))?.seq;
+            if known.is_none_or(|k| seq > k) {
                 self.book.accept_conv_link(conn, &conv, &entry.link, entry.log).await?;
             }
         }
