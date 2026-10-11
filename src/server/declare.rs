@@ -22,7 +22,7 @@ pub(crate) const PROVIDER_ID: &str = "friend-im";
 pub(crate) const PROVIDER_NAME: &str = "Friend-IM";
 /// 设置项：服务器地址。
 pub(crate) const SETTING_SERVER: &str = "serverUrl";
-/// 服务器地址的默认值：用户部署在 xdt-server 上的那台（契约 §8：服务器地址是插件的设置项，默认填用户的服务器）。
+/// 服务器地址的默认值：Friend-IM 的官方服务器（契约 §8：服务器地址是插件的设置项，默认填官方的那台）。
 pub(crate) const DEFAULT_SERVER: &str = "https://hhh-friend-im.magiclizi.com";
 /// 一页最多几条（同服务器的上限）。
 pub(crate) const PAGE_MAX: u32 = limits::HISTORY_PAGE_MAX;

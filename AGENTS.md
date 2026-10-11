@@ -48,7 +48,7 @@ Windows 上程序按窗口程序编（`src/main.rs` 开头的 `windows_subsystem
 ## 改完必须
 
 1. `cargo build --release` 通过。
-2. 跑自检：`hhh-im-check <插件文件夹>/hhh-im-provider.json`，全部通过（没装：`cargo install --git https://github.com/MagicLizi/hhh-im-sdk --tag v0.1.0 hhh-im-protocol --features transport,package`）。
+2. 跑自检：`hhh-im-check <插件文件夹>/hhh-im-provider.json`，全部通过（没装：`cargo install --git https://github.com/MagicLizi/hhh-im-sdk --tag v0.2.0 hhh-im-protocol --features transport,package`）。
    开发时清单可以指向 `target/release` 里的程序，或先跑 `scripts/pack` 用 `dist/stage`。
 3. 在 HHH 里试一遍：设置 → IM → 添加 IM → 文件夹，选 `dist/stage`（或你的插件文件夹），登录、收发消息都走一遍。
 

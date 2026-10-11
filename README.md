@@ -2,7 +2,7 @@
 
 端到端加密的 IM，以插件形式接入 HHH 的 Friend（按 [HHH IM 插件协议](https://github.com/MagicLizi/hhh-im-sdk)）：消息、图片、文件、群名和群头像只有成员的电脑能解开，**运行服务器的人（包括我们自己）也看不到**。
 
-> 状态：开发中，还不能用。
+> 状态：开发中，还不能用。插件已经能按 HHH 插件协议收发消息、翻历史（测试扮演 HHH 验过），但还不能在 Friend 里登录（用 Cindy 账号自动登录、开通、批准新电脑在下一版做）。
 
 ## 用起来是什么样
 
@@ -26,7 +26,9 @@
 ## 仓库
 
 - 本仓库：
-  - 根目录 `friend-im`：插件程序（按 [HHH IM 插件模板](https://github.com/MagicLizi/hhh-im-plugin-template) 的结构），把客户端库翻成 HHH 插件协议（还在写）。
+  - 根目录 `friend-im`：插件程序（按 [HHH IM 插件模板](https://github.com/MagicLizi/hhh-im-plugin-template) 的结构），把客户端库翻成 HHH 插件协议：
+    会话与成员、翻历史（可带时间窗口）、实时推送（宿主确认才算、不确认重推、带同步位置）、发文字 / @人 / @所有人 / 回复 / 图片 / 文件、
+    撤回自己的消息、按段读图片与文件、断线时报“连接中”、这台电脑被移出时报授权失效。登录与账号、群的操作还没做。
   - `core/`（`friend-im-core`）：插件和服务器共用的部分——钥匙、签名链、封装、消息与文件加密、新电脑批准握手、恢复密钥的写法、和服务器之间的格式。不碰网络和文件，以后手机端也能原样用。
   - `client/`（`friend-im-client`）：客户端库——连服务器、核对签名链、钥匙缓存、同步与断线重连、文件分段上传下载。不认识 HHH 协议。
 - 服务器：[hhh-friend-im-server](https://github.com/MagicLizi/hhh-friend-im-server)（它的端到端测试直接用本仓库的客户端库）。
@@ -36,15 +38,16 @@
 按 `AGENTS.md` 的规矩写（插件只做和服务器说话、翻成统一格式、声明能力；聊天记录、凭据、配置交给 HHH）。
 
 ```sh
-cargo test -p friend-im-core -p friend-im-client   # 共用部分与客户端库（含锁住线上格式的夹具 core/tests/format_v1.rs）
+cargo test --workspace   # 插件、共用部分与客户端库（含锁住线上格式的夹具 core/tests/format_v1.rs）
 ```
 
-服务器与客户端库连起来的端到端测试在服务器仓库（`cargo test`），两个仓库并排放即可。
+端到端测试在服务器仓库，两个仓库并排放即可：服务器与客户端库连起来的在 `cargo test`；插件的在 `plugin-e2e/`
+（测试扮演 HHH，和真的插件讲协议，插件连本机起的服务器）。
 
 打包插件：
 
 ```sh
-cargo install --git https://github.com/MagicLizi/hhh-im-sdk --tag v0.1.0 hhh-im-protocol --features transport,package
+cargo install --git https://github.com/MagicLizi/hhh-im-sdk --tag v0.2.0 hhh-im-protocol --features transport,package
 powershell -File scripts/pack.ps1     # Windows
 scripts/pack.sh                       # macOS / Linux
 hhh-im-check dist/stage/hhh-im-provider.json

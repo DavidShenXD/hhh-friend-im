@@ -332,7 +332,7 @@ dependencies = [
 
 [[package]]
 name = "friend-im-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "friend-im-core",
  "futures-util",
@@ -350,7 +350,7 @@ dependencies = [
 
 [[package]]
 name = "friend-im-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
