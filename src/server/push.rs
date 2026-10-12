@@ -325,7 +325,7 @@ async fn push_history_item(live: &Live, conv: &ConvId, item: HistoryItem) {
         }
         HistoryItem::Notice(notice) => {
             let names = live.names(translate::notice_people(&notice)).await;
-            if let Some(wire) = translate::notice(&notice, &names) {
+            if let Some(wire) = translate::notice(&notice, &names, &live.me) {
                 live.outbox.push(Event::Messages { conversation_id: conv.to_string(), messages: vec![wire] });
             }
         }
@@ -358,7 +358,7 @@ async fn on_notice(live: &Live, outbox: &Outbox, notice: Notice) {
         ensure_conversation(live, outbox, &conv).await;
     }
     let names = live.names(translate::notice_people(&notice)).await;
-    if let Some(wire) = translate::notice(&notice, &names) {
+    if let Some(wire) = translate::notice(&notice, &names, &live.me) {
         outbox.push(Event::Messages { conversation_id: conv.to_string(), messages: vec![wire] });
     }
     if i_left {

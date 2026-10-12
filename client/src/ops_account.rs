@@ -14,7 +14,7 @@ use friend_im_core::CoreError;
 use crate::conn::Conn;
 use crate::error::{ClientError, Result};
 use crate::links::{FriendLink, http_base};
-use crate::state::{Approval, NewDeviceJoin, State, now_ms};
+use crate::state::{Approval, NewDeviceJoin, State};
 use crate::types::Update;
 
 fn appended(response: Response) -> Result<u64> {
@@ -37,7 +37,7 @@ impl State {
         let recovery = RecoveryKey::generate();
         let recovery_secret = recovery.device_secret();
         let seed = AccountSeed::generate();
-        let body = eldest_body(&self.uid, epoch, self.device_entry(), &recovery_secret, seed.public(1), now_ms());
+        let body = eldest_body(&self.uid, epoch, self.device_entry(), &recovery_secret, seed.public(1), self.now_ms());
         let link = AccountLink::sign(&body, &self.creds.device);
         let bundle = AccountKeyBundle {
             generation: 1,
@@ -87,7 +87,7 @@ impl State {
         let previous = self.keys.current_account_seed(&state)?.clone();
         let seed = AccountSeed::generate();
         let generation = state.current_key().generation + 1;
-        let link = AccountLink::sign(&state.next_body(change(&seed, generation), now_ms()), &self.creds.device);
+        let link = AccountLink::sign(&state.next_body(change(&seed, generation), self.now_ms()), &self.creds.device);
         let mut next = state.clone();
         next.apply(&link, u64::MAX - 1).map_err(|e| ClientError::state(e.to_string()))?;
         let mut bundle = self.account_bundle(&next, &seed, &previous)?;
@@ -156,7 +156,7 @@ impl State {
             device: self.creds.device.id(),
             key: None,
         };
-        let link = AccountLink::sign(&state.next_body(change, now_ms()), &self.creds.device);
+        let link = AccountLink::sign(&state.next_body(change, self.now_ms()), &self.creds.device);
         appended(conn.request(Request::AppendAccount { links: vec![link], keys: None }).await?)?;
         tracing::info!("已退出登录");
         Ok(())
@@ -275,7 +275,7 @@ impl State {
             device: self.device_entry(),
             proof: device_proof(&self.creds.device, &self.uid, self.epoch, ProofRole::Device),
         };
-        let link = AccountLink::sign(&state.next_body(change, now_ms()), &secret);
+        let link = AccountLink::sign(&state.next_body(change, self.now_ms()), &secret);
         let keys = AccountKeyBundle {
             generation,
             boxes: vec![self.seal_account_seed(state.epoch, generation, &seed, &self.creds.device.public())?],
@@ -348,7 +348,7 @@ impl State {
             },
             proof: approval.info.proof,
         };
-        let link = AccountLink::sign(&state.next_body(change, now_ms()), &self.creds.device);
+        let link = AccountLink::sign(&state.next_body(change, self.now_ms()), &self.creds.device);
         let keys = AccountKeyBundle {
             generation,
             boxes: vec![self.seal_account_seed(state.epoch, generation, &seed, &approval.info.device)?],

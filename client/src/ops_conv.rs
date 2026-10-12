@@ -17,7 +17,7 @@ use friend_im_core::wire::{ConvActivity, ConvKeyBundle, ConvSummary, ErrorCode, 
 use crate::conn::Conn;
 use crate::error::{ClientError, Result};
 use crate::links::{InviteLink, http_base};
-use crate::state::{State, now_ms};
+use crate::state::State;
 use crate::types::{ConvInfo, HistoryItem, HistoryPage, Notice};
 
 /// 自己签、还没提交的环在本地预演时用的日志位置：比任何真实位置都大，签名电脑一定还在。
@@ -33,7 +33,7 @@ struct Batch {
 
 impl State {
     fn sign_conv(&self, batch: &mut Batch, me: &MemberRef, change: ConvChange) -> Result<()> {
-        let body = batch.state.next_body(&me.uid, me.eldest, change, now_ms());
+        let body = batch.state.next_body(&me.uid, me.eldest, change, self.now_ms());
         let link = ConvLink::sign(&body, &self.creds.device);
         batch
             .state
@@ -98,7 +98,7 @@ impl State {
             profile,
             via,
         };
-        let link = ConvLink::sign(&create_body(&conv, &me, change, now_ms()), &self.creds.device);
+        let link = ConvLink::sign(&create_body(&conv, &me, change, self.now_ms()), &self.creds.device);
         let mut refresh = false;
         loop {
             let boxes = self.seal_to_members(conn, &conv, 1, &seed, &members, refresh).await?;
@@ -340,7 +340,7 @@ impl State {
         let change = ConvChange::CreateInvite {
             invite: invite.clone(),
             public: secret.public(),
-            expires_ms: now_ms() + limits::INVITE_TTL_MS,
+            expires_ms: self.now_ms() + limits::INVITE_TTL_MS,
         };
         self.sign_conv(&mut batch, &me, change)?;
         let generation = batch.state.current_key().generation;
@@ -390,7 +390,7 @@ impl State {
         }
         let state = self.book.conv(conn, &conv).await?.state.clone();
         let invite = state.invites.get(&link.invite).ok_or_else(|| ClientError::verify("会话签名链里没有这个群邀请"))?;
-        if invite.revoked || invite.expires_ms <= now_ms() {
+        if invite.revoked || invite.expires_ms <= self.now_ms() {
             return Err(ClientError::state("群邀请已作废或过期"));
         }
         if invite.public != link.secret.public() {
@@ -406,7 +406,7 @@ impl State {
             invite: link.invite.clone(),
             proof,
         };
-        let body = state.next_body(&me.uid, me.eldest, change, now_ms());
+        let body = state.next_body(&me.uid, me.eldest, change, self.now_ms());
         let join = ConvLink::sign(&body, &self.creds.device);
         let boxes = self.seal_to_members(conn, &conv, generation, &conv_seed, std::slice::from_ref(&me), false).await?;
         let response = conn
@@ -472,7 +472,7 @@ impl State {
         let me = self.my_ref(conn).await?;
         let body = MessageBody {
             v: MESSAGE_VERSION,
-            ctime_ms: now_ms(),
+            ctime_ms: self.now_ms(),
             content,
         };
         let mut last = None;

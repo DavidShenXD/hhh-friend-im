@@ -113,6 +113,7 @@ impl Client {
             requests: HashMap::new(),
             approvals: HashMap::new(),
             updates,
+            clock: connected.clock,
         };
         let inner = Arc::new(Inner {
             state: tokio::sync::Mutex::new(state),
@@ -469,6 +470,7 @@ async fn reconnect(inner: &Arc<Inner>) -> Result<mpsc::Receiver<Push>> {
     state.status = welcome.status;
     state.sync_head = welcome.sync_head;
     state.epoch = welcome.epoch;
+    state.clock = connected.clock;
     inner.set_conn(Some(connected.conn.clone()));
     state.emit(Update::Connected { status: welcome.status });
     tracing::info!("已重连");

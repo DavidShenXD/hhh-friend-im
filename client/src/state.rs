@@ -64,6 +64,8 @@ pub(crate) struct State {
     pub requests: HashMap<RequestId, JoinRequestInfo>,
     pub approvals: HashMap<RequestId, Approval>,
     pub updates: mpsc::UnboundedSender<Update>,
+    /// 当前连接认下的服务器的钟。
+    pub clock: ServerClock,
 }
 
 /// 记一次失败：连接断了是预期内的（重连后补拉），只记普通信息；其余的要关注。
@@ -74,7 +76,26 @@ pub(crate) fn log_failure(error: &ClientError, what: &str) {
     }
 }
 
-/// 现在的毫秒时间。
+/// 服务器的钟：签名链与消息里写的时间按它写。本机钟快了的话，刚签的系统提示（如“X 重置了账号”）会排到紧接着发出、
+/// 带服务器时间的那条消息后面（契约 S16）。每次连上，按服务器第一帧里的时间认一次和本机钟的差。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ServerClock {
+    offset_ms: i64,
+}
+
+impl ServerClock {
+    /// 服务器第一帧里的时间，与收到它时本机的时间（都是毫秒）。
+    pub(crate) fn from_challenge(server_ms: i64, local_ms: i64) -> Self {
+        Self { offset_ms: server_ms.saturating_sub(local_ms) }
+    }
+
+    /// 按服务器的钟，现在是几点（毫秒）。
+    pub(crate) fn now_ms(&self) -> i64 {
+        now_ms().saturating_add(self.offset_ms)
+    }
+}
+
+/// 本机的毫秒时间（要写进签名、和服务器时间比的用 [`State::now_ms`]）。
 pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -83,6 +104,11 @@ pub(crate) fn now_ms() -> i64 {
 }
 
 impl State {
+    /// 按服务器的钟，现在是几点（毫秒）：写进签名链、消息正文、群邀请链接到期时间的都用它。
+    pub(crate) fn now_ms(&self) -> i64 {
+        self.clock.now_ms()
+    }
+
     pub fn emit(&self, update: Update) {
         let _ = self.updates.send(update);
     }
@@ -503,5 +529,21 @@ impl State {
         self.load_account_keys(conn).await?;
         self.emit(Update::Activated);
         self.catch_up(conn).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 本机钟快一秒（验收那台电脑实测）：按服务器的钟写，比本机钟早一秒左右，而不是照抄本机钟。
+    #[test]
+    fn the_server_clock_follows_the_server_not_the_local_clock() {
+        let local = now_ms();
+        let clock = ServerClock::from_challenge(local - 1_000, local);
+        let now = clock.now_ms();
+        assert!(now < now_ms(), "本机钟快时，按服务器的钟写的时间更早");
+        assert!((now - (local - 1_000)).abs() < 1_000);
+        assert_eq!(ServerClock::default().offset_ms, 0, "没连上过就按本机钟");
     }
 }

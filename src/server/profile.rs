@@ -5,7 +5,8 @@
 //! - **收到**：个人资料不显示成消息；按发送人记最新的一份（日志序号大的为准，内存里至多 [`PROFILES_MAX`] 人），推
 //!   `people` 事件告诉宿主这个人的头像键；之后人名、成员、私聊会话都带上它。
 //! - **头像键**就是头像地址（不超过 [`AVATAR_KEY_MAX`] 字节）。宿主来读（`avatars/read`）时插件按地址取：只取 https、主机在
-//!   允许的名单里、至多 [`AVATAR_MAX_BYTES`]、只收 PNG / JPEG / WebP / GIF，内存里留最近 [`AVATAR_CACHE_MAX`] 张。名单：取样前
+//!   允许的名单里、至多 [`AVATAR_MAX_BYTES`]、只收 PNG / JPEG / WebP / GIF，内存里留最近 [`AVATAR_CACHE_MAX`] 张、合计不超过
+//!   [`AVATAR_CACHE_MAX_BYTES`]。名单：取样前
 //!   先认自己头像地址的主机（Cindy 给的，可信），好友不能借个人资料让插件去连任意网站。
 
 use std::collections::{HashMap, VecDeque};
@@ -30,9 +31,11 @@ pub(crate) const PROFILES_MAX: usize = 4096;
 /// 头像键（头像地址）至多多少字节：协议的编号上限。
 pub(crate) const AVATAR_KEY_MAX: usize = 256;
 /// 一张头像至多多少字节。
-pub(crate) const AVATAR_MAX_BYTES: usize = 1024 * 1024;
+pub(crate) const AVATAR_MAX_BYTES: usize = 10 * 1024 * 1024;
 /// 内存里留几张取过的头像。
 pub(crate) const AVATAR_CACHE_MAX: usize = 64;
+/// 内存里留的头像合计至多多少字节（张数没到也按它丢最旧的）。
+pub(crate) const AVATAR_CACHE_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// 发个人资料的间隔（服务器每秒至多 5 条，留一条给用户自己发消息）。
 pub(crate) const ANNOUNCE_GAP: Duration = Duration::from_millis(250);
 /// 取一张头像至多等多久。
@@ -53,6 +56,11 @@ pub(crate) fn host_of(url: &str) -> Option<String> {
     let rest = url.strip_prefix("https://")?;
     let host = rest.split(['/', '?', '#']).next()?;
     (!host.is_empty() && !host.contains('@')).then(|| host.to_ascii_lowercase())
+}
+
+/// 这么多字节的头像收不收（不超过 [`AVATAR_MAX_BYTES`]）。
+pub(crate) fn avatar_fits(len: usize) -> bool {
+    len <= AVATAR_MAX_BYTES
 }
 
 /// 按文件头认出图片格式（只收这四种）。
@@ -106,7 +114,7 @@ impl Profiles {
     }
 }
 
-/// 取过的头像（地址 → 字节），按最近使用留 [`AVATAR_CACHE_MAX`] 张。
+/// 取过的头像（地址 → 字节），按最近使用留 [`AVATAR_CACHE_MAX`] 张、合计不超过 [`AVATAR_CACHE_MAX_BYTES`]。
 pub(crate) struct Avatars {
     http: reqwest::Client,
     /// 允许取头像的主机（自己头像地址的主机）。
@@ -169,7 +177,7 @@ impl Avatars {
             "头像取不到。".to_owned()
         })? {
             bytes.extend_from_slice(&chunk);
-            if bytes.len() > AVATAR_MAX_BYTES {
+            if !avatar_fits(bytes.len()) {
                 tracing::info!("头像太大，不取");
                 return Err("头像太大。".into());
             }
@@ -179,13 +187,21 @@ impl Avatars {
             return Err("头像不是图片。".into());
         }
         let bytes = std::sync::Arc::new(bytes);
+        self.remember(url, bytes.clone());
+        Ok(bytes)
+    }
+
+    /// 记进缓存（最新的放最后），再按张数与合计字节数丢最旧的；最新的一张总留着。
+    fn remember(&self, url: &str, bytes: std::sync::Arc<Vec<u8>>) {
         let mut cache = self.cache.lock().expect("头像缓存锁中毒");
         cache.retain(|(key, _)| key != url);
-        cache.push_back((url.to_owned(), bytes.clone()));
-        while cache.len() > AVATAR_CACHE_MAX {
-            cache.pop_front();
+        cache.push_back((url.to_owned(), bytes));
+        let mut total: usize = cache.iter().map(|(_, bytes)| bytes.len()).sum();
+        while cache.len() > 1 && (cache.len() > AVATAR_CACHE_MAX || total > AVATAR_CACHE_MAX_BYTES) {
+            if let Some((_, dropped)) = cache.pop_front() {
+                total -= dropped.len();
+            }
         }
-        Ok(bytes)
     }
 
     fn cached(&self, url: &str) -> Option<std::sync::Arc<Vec<u8>>> {
@@ -200,7 +216,7 @@ impl Avatars {
     /// 测试用：放一张进缓存。
     #[cfg(test)]
     pub(crate) fn put(&self, url: &str, bytes: Vec<u8>) {
-        self.cache.lock().unwrap().push_back((url.to_owned(), std::sync::Arc::new(bytes)));
+        self.remember(url, std::sync::Arc::new(bytes));
     }
 }
 
@@ -317,6 +333,31 @@ mod tests {
         assert_eq!(profiles.avatar(&a), None);
         assert!(profiles.note(&b, 1, Some("http://x.com/insecure.png")), "第一次见要报");
         assert_eq!(profiles.avatar(&b), None, "不是 https 的不当头像");
+    }
+
+    // Cindy 的头像实测有 1 MiB 出头的（一个组织身份的 PNG 是 1,062,747 字节）：照 HHH 读头像的上限收，不当成“太大”。
+    #[test]
+    fn a_cindy_avatar_a_little_over_one_mib_is_taken() {
+        assert!(avatar_fits(1_062_747));
+        assert!(avatar_fits(10 * 1024 * 1024), "和宿主读头像的上限一样");
+        assert!(!avatar_fits(10 * 1024 * 1024 + 1));
+    }
+
+    // 缓存既按张数、也按合计字节数留最近的：大头像多了也占不了多少内存，最新的一张总在。
+    #[test]
+    fn the_avatar_cache_stays_within_count_and_bytes() {
+        let avatars = Avatars::default();
+        for i in 0..3 {
+            avatars.put(&format!("https://x.com/{i}.png"), vec![0; 7 * 1024 * 1024]);
+        }
+        assert!(avatars.cached("https://x.com/0.png").is_none(), "超出合计字节数，最旧的丢掉");
+        assert!(avatars.cached("https://x.com/2.png").is_some());
+        for i in 0..AVATAR_CACHE_MAX + 6 {
+            avatars.put(&format!("https://y.com/{i}.png"), vec![0; 10]);
+        }
+        let cache = avatars.cache.lock().unwrap();
+        assert_eq!(cache.len(), AVATAR_CACHE_MAX);
+        assert!(cache.iter().map(|(_, bytes)| bytes.len()).sum::<usize>() <= AVATAR_CACHE_MAX_BYTES);
     }
 
     // 只从自己头像的主机取；缓存里的直接给。

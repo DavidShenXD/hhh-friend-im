@@ -401,7 +401,7 @@ pub(crate) async fn history_page(live: &Live, conv: &ConvId, items: Vec<HistoryI
         let wire = match item {
             HistoryItem::Message(m) => translate::message(m, &names),
             HistoryItem::Rejected { id, ts_ms, sender, .. } => Some(translate::unreadable(conv.as_str(), id, sender, *ts_ms, &names)),
-            HistoryItem::Notice(n) => translate::notice(n, &names),
+            HistoryItem::Notice(n) => translate::notice(n, &names, &live.me),
         };
         if let Some(wire) = wire {
             if kept.len() == limit {

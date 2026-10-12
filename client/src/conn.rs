@@ -47,6 +47,8 @@ pub(crate) struct Conn {
 pub(crate) struct Connected {
     pub conn: Arc<Conn>,
     pub welcome: Welcome,
+    /// 按第一帧里的服务器时间认下的服务器的钟。
+    pub clock: crate::state::ServerClock,
     /// 服务器推送；连接断开时关闭。
     pub pushes: mpsc::Receiver<Push>,
 }
@@ -82,9 +84,10 @@ async fn connect_inner(url: &str, auth: HelloAuth, device: &DeviceSecret, name: 
             break serde_json::from_str::<ServerFrame>(&text).map_err(|_| ClientError::protocol("第一帧读不懂"))?;
         }
     };
-    let ServerFrame::Challenge { protocol, nonce, .. } = challenge else {
+    let ServerFrame::Challenge { protocol, nonce, server_time_ms } = challenge else {
         return Err(ClientError::protocol("第一帧应是随机数"));
     };
+    let clock = crate::state::ServerClock::from_challenge(server_time_ms, crate::state::now_ms());
     if protocol != wire::PROTOCOL_VERSION {
         return Err(ClientError::protocol(format!("服务器接口版本是 {protocol}，客户端是 {}", wire::PROTOCOL_VERSION)));
     }
@@ -185,6 +188,7 @@ async fn connect_inner(url: &str, auth: HelloAuth, device: &DeviceSecret, name: 
     });
 
     Ok(Connected {
+        clock,
         conn: Arc::new(Conn { out, pending, next_id, stop }),
         welcome,
         pushes,

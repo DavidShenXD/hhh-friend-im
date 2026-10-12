@@ -164,8 +164,9 @@ pub(crate) fn unreadable(conv: &str, id: &MsgId, sender: &Uid, ts_ms: i64, names
     out
 }
 
-/// 系统提示的文字（契约 S9、S11、S13、S16）。换钥匙、群邀请链接的发出与作废不用给人看，为 `None`。
-pub(crate) fn notice_text(notice: &Notice, names: &Names) -> Option<String> {
+/// 系统提示的文字（契约 S9、S11、S13、S16）。换钥匙、群邀请链接的发出与作废不用给人看，为 `None`。`me` 是这台电脑
+/// 登录的账号：重置账号的提示给本人看时说“你重置了账号”，不叫自己去核对自己。
+pub(crate) fn notice_text(notice: &Notice, names: &Names, me: &Uid) -> Option<String> {
     let author = name_of(names, &notice.author);
     let list = |uids: &[Uid]| uids.iter().map(|u| name_of(names, u)).collect::<Vec<_>>().join("、");
     Some(match &notice.change {
@@ -181,6 +182,7 @@ pub(crate) fn notice_text(notice: &Notice, names: &Names) -> Option<String> {
         ConvNotice::Removed { uid, reason: RemoveReason::Kicked } => format!("{author} 把 {} 移出了群", name_of(names, uid)),
         ConvNotice::Removed { uid, reason: RemoveReason::Reset } => format!("{} 重置了账号，已退出群", name_of(names, uid)),
         ConvNotice::Left => format!("{author} 退出了群"),
+        ConvNotice::MemberReset { uid } if uid == me => "你重置了账号，之后的消息用新钥匙加密".to_owned(),
         ConvNotice::MemberReset { uid } => format!(
             "{} 重置了账号，之后的消息用新钥匙加密。想确认是本人，请当面或通过别的渠道问一下",
             name_of(names, uid)
@@ -202,8 +204,8 @@ pub(crate) fn notice_people(notice: &Notice) -> Vec<Uid> {
 }
 
 /// 一条系统提示 → 协议的系统消息（编号 `n-<日志序号>`，时间是签它的人写的时间）。
-pub(crate) fn notice(notice: &Notice, names: &Names) -> Option<Wire> {
-    let text = notice_text(notice, names)?;
+pub(crate) fn notice(notice: &Notice, names: &Names, me: &Uid) -> Option<Wire> {
+    let text = notice_text(notice, names, me)?;
     Some(wire(format!("n-{}", notice.log), notice.conv.to_string(), system(), notice.ctime_ms, vec![Block::Text { text }]))
 }
 
@@ -324,7 +326,7 @@ mod tests {
     fn notices_read_like_the_contract() {
         let names = Names::from([(uid(1), "小满".to_owned()), (uid(2), "阿哲".to_owned()), (uid(3), "米粒".to_owned())]);
         let notice = |author: u8, change| Notice { conv: ConvId::from_raw([9; 16]), log: 4, ctime_ms: 7, author: uid(author), change };
-        let text = |n: &Notice| notice_text(n, &names);
+        let text = |n: &Notice| notice_text(n, &names, &uid(1));
         assert_eq!(
             text(&notice(1, ConvNotice::Created { kind: ConvKind::Group, members: vec![uid(1), uid(2), uid(3)], via: None })).unwrap(),
             "小满 创建了群，加入了 阿哲、米粒"
@@ -338,9 +340,14 @@ mod tests {
             text(&notice(2, ConvNotice::MemberReset { uid: uid(2) })).unwrap(),
             "阿哲 重置了账号，之后的消息用新钥匙加密。想确认是本人，请当面或通过别的渠道问一下"
         );
+        assert_eq!(
+            text(&notice(1, ConvNotice::MemberReset { uid: uid(1) })).unwrap(),
+            "你重置了账号，之后的消息用新钥匙加密",
+            "本人看到的不叫自己去核对自己"
+        );
         assert_eq!(text(&notice(9, ConvNotice::Left)).unwrap(), "有人 退出了群");
         assert!(text(&notice(1, ConvNotice::Rotated)).is_none());
-        let wire = super::notice(&notice(1, ConvNotice::Left), &names).unwrap();
+        let wire = super::notice(&notice(1, ConvNotice::Left), &names, &uid(1)).unwrap();
         assert_eq!((wire.id.as_str(), wire.sender.kind, wire.created_at_ms), ("n-4", SenderKind::System, 7));
         assert!(wire.sender.id.is_empty());
     }
