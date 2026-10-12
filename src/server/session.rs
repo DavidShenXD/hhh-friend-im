@@ -108,10 +108,17 @@ impl Live {
                         None
                     }
                 };
+                let name = match name {
+                    Some(name) => name,
+                    // 重置账号就退出了以前的群、解不开它的资料（契约 S7）：给空名字，宿主留着本机记着的群名，
+                    // 不编一个“群聊”盖掉它（重置不删本机已有的聊天记录）。
+                    None if self.client.groups_left_by_reset().await.is_ok_and(|left| left.contains(conv)) => String::new(),
+                    None => "群聊".into(),
+                };
                 Conversation {
                     id: conv.to_string(),
                     kind: ConversationKind::Group,
-                    name: name.unwrap_or_else(|| "群聊".into()),
+                    name,
                     avatar: None,
                     peer: None,
                     private: false,
