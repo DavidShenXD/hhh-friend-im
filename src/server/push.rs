@@ -32,6 +32,8 @@ use super::translate;
 const BATCH_MAX: usize = 500;
 /// 撤回推来、原来那条不在最近见过的消息里时，往前翻几页历史找它（每页 100 条）。
 const RECALL_SEARCH_PAGES: usize = 5;
+/// 回到以前待过的群时，往前翻几页找自己离开的那条（每页 100 条），补推不在的那段。
+const REJOIN_BACKFILL_PAGES: usize = 20;
 
 /// 等着推给宿主的事件。
 #[derive(Default)]
@@ -114,10 +116,13 @@ async fn translate_updates(server: Arc<Server>, live: Arc<Live>, mut updates: Up
                 outbox.push(Event::Messages { conversation_id: conv.to_string(), messages: vec![wire] });
             }
             Update::Conv(notice) => {
-                // 刚进的会话：发一条个人资料（在后台发，不挡推送）。
+                // 刚进的会话：发一条个人资料；以前待过、这次是回来的，补推不在的那段（都在后台做，不挡推送）。
                 if joined(&live.me, &notice) {
-                    let (server, live, conv) = (server.clone(), live.clone(), notice.conv.clone());
-                    tokio::spawn(async move { server.announce_to(&live, &conv).await });
+                    let (server, live, conv, log) = (server.clone(), live.clone(), notice.conv.clone(), notice.log);
+                    tokio::spawn(async move {
+                        server.announce_to(&live, &conv).await;
+                        backfill_rejoined(&live, &conv, log).await;
+                    });
                 }
                 on_notice(&live, &outbox, notice).await;
             }
@@ -247,6 +252,67 @@ async fn search(live: &Live, recall: &Message, target: &MsgId) -> Option<(Uid, i
     None
 }
 
+/// 这条提示是不是“我离开了这个会话”（自己退群、被移出）。
+fn left(me: &Uid, notice: &Notice) -> bool {
+    match &notice.change {
+        ConvNotice::Left => notice.author == *me,
+        ConvNotice::Removed { uid, .. } => uid == me,
+        _ => false,
+    }
+}
+
+/// 回到以前待过的群（被移出或退群后又被邀请、凭链接回来，契约 S12）：宿主本机已有在群期间的消息，只缺不在的那段——
+/// 从这次加入往前翻到自己离开的那条，把这段的消息与提示补推给宿主（宿主按编号去重，推重了也不会多一条）。
+/// 翻到头也没见自己离开过的，是第一次进：什么也不推，宿主打开会话时自己从头读历史。最多翻 [`REJOIN_BACKFILL_PAGES`] 页。
+async fn backfill_rejoined(live: &Live, conv: &ConvId, joined_log: u64) {
+    let mut before = Some(joined_log);
+    let mut missed = Vec::new();
+    for _ in 0..REJOIN_BACKFILL_PAGES {
+        let page = match live.client.history(conv, before, 100).await {
+            Ok(page) => page,
+            Err(error) => {
+                tracing::info!(%conv, %error, "回到群里，补推不在的那段时读历史没成");
+                return;
+            }
+        };
+        for item in &page.items {
+            if let HistoryItem::Notice(notice) = item
+                && left(&live.me, notice)
+            {
+                tracing::info!(%conv, count = missed.len(), "回到群里，补推不在的那段");
+                for item in missed.into_iter().rev() {
+                    push_history_item(live, conv, item).await;
+                }
+                return;
+            }
+            missed.push(item.clone());
+        }
+        if !page.more {
+            return;
+        }
+        before = page.items.iter().map(HistoryItem::log).min();
+    }
+    tracing::info!(%conv, "回到群里，往前翻了几页没找到离开的那条，不补推");
+}
+
+/// 翻历史翻到的一项照推来的推给宿主：消息、解不开的消息、系统提示。
+async fn push_history_item(live: &Live, conv: &ConvId, item: HistoryItem) {
+    match item {
+        HistoryItem::Message(message) => on_message(live, &live.outbox, message).await,
+        HistoryItem::Rejected { id, ts_ms, sender, .. } => {
+            let names = live.names([sender.clone()]).await;
+            let wire = translate::unreadable(conv.as_str(), &id, &sender, ts_ms, &names);
+            live.outbox.push(Event::Messages { conversation_id: conv.to_string(), messages: vec![wire] });
+        }
+        HistoryItem::Notice(notice) => {
+            let names = live.names(translate::notice_people(&notice)).await;
+            if let Some(wire) = translate::notice(&notice, &names) {
+                live.outbox.push(Event::Messages { conversation_id: conv.to_string(), messages: vec![wire] });
+            }
+        }
+    }
+}
+
 /// 这条提示是不是“我进了这个会话”（建会话时在成员里、被邀请、凭链接加入）。
 fn joined(me: &Uid, notice: &Notice) -> bool {
     match &notice.change {
@@ -259,11 +325,7 @@ fn joined(me: &Uid, notice: &Notice) -> bool {
 /// 会话里的系统提示：会话本身变了就重新推会话（自己离开了就推“会话没有了”），再推这条提示。
 async fn on_notice(live: &Live, outbox: &Outbox, notice: Notice) {
     let conv = notice.conv.clone();
-    let i_left = match &notice.change {
-        ConvNotice::Left => notice.author == live.me,
-        ConvNotice::Removed { uid, .. } => *uid == live.me,
-        _ => false,
-    };
+    let i_left = left(&live.me, &notice);
     let changed = matches!(
         notice.change,
         ConvNotice::Created { .. } | ConvNotice::Added { .. } | ConvNotice::JoinedByInvite | ConvNotice::ProfileChanged | ConvNotice::Left | ConvNotice::Removed { .. }

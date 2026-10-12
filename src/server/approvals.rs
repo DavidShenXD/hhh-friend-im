@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use friend_im_client::core::ids::RequestId;
 use friend_im_client::core::limits::JOIN_MAX_ATTEMPTS;
 use friend_im_client::core::wire::{JoinCloseReason, JoinRequestInfo};
-use friend_im_client::core::words::JoinCode;
+use friend_im_client::core::words::{JOIN_CODE_WORDS, JoinCode};
 use hhh_im_protocol::method::{Notice, NoticeAction, SessionNoticeParams};
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -26,6 +26,16 @@ pub(crate) const APPROVE_PREFIX: &str = "approve:";
 
 /// 电脑增减提醒的编号。
 static NEXT_NOTE: AtomicU64 = AtomicU64::new(1);
+
+/// 交给服务器核对前，输进来的 4 个词哪里不对：个数不对就说要几个；个数对、却有不在词表里的词时，它一定和新电脑上的
+/// 不一样（新电脑只从词表里挑词），照“不一致”说（契约 S21），不算一次。
+fn code_problem(words: &str) -> Option<&'static str> {
+    if JoinCode::parse(words).is_ok() {
+        return None;
+    }
+    let count = words.split(|c: char| c.is_whitespace() || c == '-').filter(|part| !part.is_empty()).count();
+    Some(if count == JOIN_CODE_WORDS { "和新电脑上的不一致，再看一下。" } else { "要输 4 个词，用空格隔开。" })
+}
 
 /// 一个时间（毫秒）写成“今天 10:42”/“10 月 12 日 10:42”（本机时区不可知，用 UTC+8，和服务器所在一致）。
 pub(crate) fn when(ms: i64) -> String {
@@ -165,8 +175,8 @@ impl Server {
                 Input::Choose { .. } => {}
                 Input::Submit(values) => {
                     let words = values.get("words").map(String::as_str).unwrap_or_default();
-                    if JoinCode::parse(words).is_err() {
-                        ui.step(input_step(Some("要输 4 个词，用空格隔开。".into())));
+                    if let Some(problem) = code_problem(words) {
+                        ui.step(input_step(Some(problem.into())));
                         continue;
                     }
                     ui.step(json!({ "kind": "message", "text": "正在核对…", "tone": "info" }));
@@ -213,5 +223,13 @@ mod tests {
         assert!(when(ms).ends_with("10:42"), "{}", when(ms));
         assert_eq!(civil(0), (1970, 1, 1));
         assert_eq!(civil(20_738), (2026, 10, 12));
+    }
+
+    #[test]
+    fn four_words_outside_the_list_read_as_a_mismatch() {
+        assert_eq!(code_problem("urban fatal hour around"), None);
+        assert_eq!(code_problem("one two three four"), Some("和新电脑上的不一致，再看一下。"));
+        assert_eq!(code_problem("urban fatal hour"), Some("要输 4 个词，用空格隔开。"));
+        assert_eq!(code_problem(""), Some("要输 4 个词，用空格隔开。"));
     }
 }

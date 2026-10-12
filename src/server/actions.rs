@@ -571,7 +571,14 @@ impl Server {
                 .map(|m| {
                     let me = m.uid == live.me;
                     let detail = if me { Some("你自己") } else { details.get(&m.uid).copied() };
-                    let actions = if mine && !me { vec![json!({ "id": "remove", "label": "移出", "danger": true })] } else { vec![] };
+                    // 别人那一行都能“发消息”（S10，不用先加好友）；群主还能移出。
+                    let mut actions = Vec::new();
+                    if !me {
+                        actions.push(json!({ "id": "message", "label": "发消息" }));
+                    }
+                    if mine && !me {
+                        actions.push(json!({ "id": "remove", "label": "移出", "danger": true }));
+                    }
                     person_row(m.uid.as_str(), &name_of(&m.uid), detail, (m.uid == info.owner).then_some("群主"), actions)
                 })
                 .collect();
@@ -580,6 +587,23 @@ impl Server {
             })));
             match next(rx).await {
                 None => return,
+                Some(Input::Choose { choice, row: Some(row), .. }) if choice == "message" => {
+                    let Some(target) = info.members.iter().find(|m| m.uid.as_str() == row && m.uid != live.me).map(|m| m.uid.clone()) else {
+                        continue;
+                    };
+                    let who = name_of(&target);
+                    ui.step(waiting("正在打开私聊…"));
+                    match live.client.open_dm(&target, conv).await {
+                        // 新建的私聊随推送进会话列表；已经有的照旧在那里。
+                        Ok(_) => ui.done(Some(&format!("和「{who}」私聊")), Some("私聊在你的会话列表里，点开就能聊，不用先加好友。")),
+                        Err(error) => {
+                            tracing::info!(%conv, %error, "和群成员私聊没成");
+                            tip = Some((format!("没能打开和「{who}」的私聊：{}", said(&error)), true));
+                            continue;
+                        }
+                    }
+                    return;
+                }
                 Some(Input::Choose { choice, row: Some(row), .. }) if choice == "remove" && mine => {
                     let Some(target) = info.members.iter().find(|m| m.uid.as_str() == row && m.uid != live.me).map(|m| m.uid.clone()) else {
                         continue;
