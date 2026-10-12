@@ -47,8 +47,12 @@ impl Sends {
     /// 这次发送的结果槽；第一次见到这个编号时另外给出写结果的那一头（由调用方去发）。
     fn slot(&self, operation: &str) -> (watch::Receiver<Option<SendResult>>, Option<watch::Sender<Option<SendResult>>>) {
         let mut slots = self.slots.lock().expect("发送记录锁中毒");
-        if let Some((_, rx)) = slots.iter().find(|(id, _)| id == operation) {
-            return (rx.clone(), None);
+        if let Some(at) = slots.iter().position(|(id, _)| id == operation) {
+            // 确定没发出去的（结果是错误）可以用同一个编号再发一次：宿主重试沿用操作编号。
+            if !matches!(&*slots[at].1.borrow(), Some(Err(_))) {
+                return (slots[at].1.clone(), None);
+            }
+            slots.remove(at);
         }
         let (tx, rx) = watch::channel(None);
         slots.push_back((operation.to_owned(), rx.clone()));
@@ -288,6 +292,12 @@ impl Server {
         let id = send_id(&live.me, &params.operation_id);
         let sent = {
             let _turn = self.sends.gate.lock().await;
+            // 没连着服务器：一定没发出去，回可以重试的错误（契约 S19），宿主记成“没有发出去”、能重试；
+            // 发出去之后才断的才说不确定。
+            if !live.client.connected() {
+                tracing::info!(%conv, "发送时没连着服务器，没有发出去");
+                return Err(errors::client(&ClientError::Disconnected));
+            }
             live.client.send(&conv, &id, content).await
         };
         let (_, ts_ms) = match sent {

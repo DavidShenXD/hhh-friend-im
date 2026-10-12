@@ -163,6 +163,11 @@ impl Client {
         &self.inner.device
     }
 
+    /// 现在连着服务器吗：没连着时发的请求一定没出这台电脑。
+    pub fn connected(&self) -> bool {
+        self.inner.conn().is_ok()
+    }
+
     /// 这台电脑的状态。
     pub async fn status(&self) -> DeviceStatus {
         self.inner.state.lock().await.status

@@ -187,6 +187,16 @@ impl State {
         Ok((Batch { state, links: Vec::new() }, me))
     }
 
+    /// 这个会话里记的是我重置之前的身份（账号签名链第一环变了）。
+    fn reset_here(&self, conv: &ConvId, me: &MemberRef) -> bool {
+        self.book.convs.get(conv).is_some_and(|record| record.state.members.get(&self.uid).is_some_and(|mine| mine.eldest != me.eldest))
+    }
+
+    /// 我重置过账号的私聊。
+    fn reset_in_dm(&self, conv: &ConvId, me: &MemberRef) -> bool {
+        self.reset_here(conv, me) && self.book.convs.get(conv).is_some_and(|record| record.state.kind == ConvKind::Dm)
+    }
+
     fn retryable(error: &ClientError) -> bool {
         matches!(error.code(), Some(ErrorCode::Invalid | ErrorCode::Conflict | ErrorCode::RotationRequired))
     }
@@ -456,7 +466,21 @@ impl State {
                 self.rotate(conn, conv, Vec::new()).await?;
             }
             let generation = self.book.convs[conv].state.current_key().generation;
-            let seed = self.conv_seed(conn, conv, generation).await?;
+            let seed = match self.conv_seed(conn, conv, generation).await {
+                Ok(seed) => seed,
+                // 我重置过账号（契约 S7）：私聊的钥匙封装给的是旧身份，拿不到。以新身份接上这个私聊（换一代、封装给现在的
+                // 两个人，对方看到“X 重置了账号”），再用新一代发。
+                Err(error) if self.reset_in_dm(conv, &me) => {
+                    self.rotate(conn, conv, Vec::new()).await?;
+                    last = Some(error);
+                    continue;
+                }
+                // 群里不能自己接上：要群里的人重新邀请（契约 S7）。
+                Err(_) if self.reset_here(conv, &me) => {
+                    return Err(ClientError::state("你重置过账号，要群里的人重新邀请你，才能在这个群里说话。"));
+                }
+                Err(error) => return Err(error),
+            };
             let sender = Sender {
                 uid: &self.uid,
                 eldest: me.eldest,
