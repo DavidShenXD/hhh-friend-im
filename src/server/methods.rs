@@ -35,8 +35,8 @@ type SendResult = Result<Value, RpcError>;
 #[derive(Default)]
 pub(crate) struct Sends {
     slots: Mutex<VecDeque<(String, watch::Receiver<Option<SendResult>>)>>,
-    /// 一条发完再发下一条。
-    gate: tokio::sync::Mutex<()>,
+    /// 一条发完再发下一条（个人资料也排在这里）。
+    pub(crate) gate: tokio::sync::Mutex<()>,
 }
 
 impl Sends {
@@ -164,8 +164,11 @@ impl Server {
         let info = live.client.conv_info(&conv).await.map_err(|e| errors::client(&e))?;
         let page = slice(info.members.into_iter().map(|m| m.uid).collect(), offset, params.limit);
         let names = live.names(page.items.iter().cloned()).await;
-        let items: Vec<Person> =
-            page.items.iter().map(|u| Person { id: u.to_string(), id_type: None, kind: PersonKind::User, name: names.get(u).cloned(), avatar: None }).collect();
+        let items: Vec<Person> = page
+            .items
+            .iter()
+            .map(|u| Person { id: u.to_string(), id_type: None, kind: PersonKind::User, name: names.get(u).cloned(), avatar: live.avatar_of(u) })
+            .collect();
         Ok(to_value(Page { items, next: page.next }))
     }
 
@@ -181,8 +184,10 @@ impl Server {
             }
         }
         let profiles = live.client.profiles(&uids).await.map_err(|e| errors::client(&e))?;
-        let found: Vec<Person> =
-            profiles.iter().map(|p| Person { id: p.uid.to_string(), id_type: None, kind: PersonKind::User, name: Some(p.name.clone()), avatar: None }).collect();
+        let found: Vec<Person> = profiles
+            .iter()
+            .map(|p| Person { id: p.uid.to_string(), id_type: None, kind: PersonKind::User, name: Some(p.name.clone()), avatar: live.avatar_of(&p.uid) })
+            .collect();
         missing.extend(uids.iter().filter(|u| !profiles.iter().any(|p| &p.uid == *u)).map(ToString::to_string));
         Ok(to_value(PeopleGetResult { found, missing }))
     }
@@ -375,6 +380,12 @@ pub(crate) async fn history_page(live: &Live, conv: &ConvId, items: Vec<HistoryI
     let mut truncated = false;
     let mut oldest = None;
     for item in &items {
+        // 翻到的个人资料照记（新电脑、重启后从历史里重新认识别人的头像）。
+        if let HistoryItem::Message(m) = item
+            && let Some(Content::Profile { avatar }) = &m.content
+        {
+            push::profile_seen(live, &m.sender, m.log, avatar.as_deref()).await;
+        }
         let wire = match item {
             HistoryItem::Message(m) => translate::message(m, &names),
             HistoryItem::Rejected { id, ts_ms, sender, .. } => Some(translate::unreadable(conv.as_str(), id, sender, *ts_ms, &names)),

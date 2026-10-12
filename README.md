@@ -2,7 +2,7 @@
 
 端到端加密的 IM，以插件形式接入 HHH 的 Friend（按 [HHH IM 插件协议](https://github.com/MagicLizi/hhh-im-sdk)）：消息、图片、文件、群名和群头像只有成员的电脑能解开，**运行服务器的人（包括我们自己）也看不到**。
 
-> 状态：开发中，还不能用。插件已经能按 HHH 插件协议收发消息、翻历史（测试扮演 HHH 验过），但还不能在 Friend 里登录（用 Cindy 账号自动登录、开通、批准新电脑在下一版做）。
+> 状态：0.3.0 是第一个能用的版本，只出 Windows x64 的包，从 Friend「设置 → IM」的官方组安装。加密层还没做外部审计（见安全模型）。
 
 ## 用起来是什么样
 
@@ -20,7 +20,7 @@
 - 只用标准构造，不自创算法：封装用 HPKE（RFC 9180，X25519 + HKDF-SHA256 + ChaCha20-Poly1305），消息与群资料用 XChaCha20-Poly1305，
   文件用分段的 ChaCha20-Poly1305，签名用 Ed25519。用到的库里 `hpke`、`spake2` 没有第三方审计；对外开放使用前要做一次加密层的外部审计。
 - **服务器看得到的**：谁和谁有私聊、每个群有哪些成员；消息的发送时间和大小、撤回了哪一条；文件的大小；名字（来自 Cindy）；
-  每个账号有几台电脑、电脑名、加入和最近在线的时间。**看不到的**：消息内容、图片、文件内容和文件名、群名、群头像、群简介、回复的是哪一条。
+  每个账号有几台电脑、电脑名、加入和最近在线的时间。**看不到的**：消息内容、图片、文件内容和文件名、群名、群头像、群简介、你的头像、回复的是哪一条。
 - 所有电脑和恢复密钥都丢了，以前的消息谁也找不回来。
 
 ## 仓库
@@ -28,7 +28,9 @@
 - 本仓库：
   - 根目录 `friend-im`：插件程序（按 [HHH IM 插件模板](https://github.com/MagicLizi/hhh-im-plugin-template) 的结构），把客户端库翻成 HHH 插件协议：
     会话与成员、翻历史（可带时间窗口）、实时推送（宿主确认才算、不确认重推、带同步位置）、发文字 / @人 / @所有人 / 回复 / 图片 / 文件、
-    撤回自己的消息、按段读图片与文件、断线时报“连接中”、这台电脑被移出时报授权失效。登录与账号、群的操作还没做。
+    撤回自己的消息、按段读图片与文件、断线时报“连接中”、这台电脑被移出时报授权失效；用 Friend 的 Cindy 账号登录（开通、出示恢复密钥、
+    新电脑等批准或用恢复密钥加入、重置），旧电脑弹出批准；我的电脑、好友链接、加好友、新建群、群成员与邀请、退出群、关于加密
+    （HHH 插件操作）；头像放在加密的个人资料里，只发给会话里的人。
   - `core/`（`friend-im-core`）：插件和服务器共用的部分——钥匙、签名链、封装、消息与文件加密、新电脑批准握手、恢复密钥的写法、和服务器之间的格式。不碰网络和文件，以后手机端也能原样用。
   - `client/`（`friend-im-client`）：客户端库——连服务器、核对签名链、钥匙缓存、同步与断线重连、文件分段上传下载。不认识 HHH 协议。
 - 服务器：[hhh-friend-im-server](https://github.com/MagicLizi/hhh-friend-im-server)（它的端到端测试直接用本仓库的客户端库）。
@@ -47,8 +49,8 @@ cargo test --workspace   # 插件、共用部分与客户端库（含锁住线�
 打包插件：
 
 ```sh
-cargo install --git https://github.com/MagicLizi/hhh-im-sdk --tag v0.2.0 hhh-im-protocol --features transport,package
-powershell -File scripts/pack.ps1     # Windows
+cargo install --git https://github.com/MagicLizi/hhh-im-sdk --tag v0.3.0 hhh-im-protocol --features transport,package
+powershell -File scripts/pack.ps1     # Windows（官方版本加 -SignKey <hhh-keys>/official/hhh-official-signing.key）
 scripts/pack.sh                       # macOS / Linux
 hhh-im-check dist/stage/hhh-im-provider.json
 ```

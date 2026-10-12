@@ -6,12 +6,19 @@
 //! - 插件发给宿主的请求（`events/push`、`credential/save`）按编号等回复（[`peer`]）；`$/cancel` 停掉对应的任务；
 //! - 每个方法交给对应的模块：握手 [`declare`]、会话 [`session`]、推送 [`push`]、读取与动作 [`methods`]、
 //!   资源与上传 [`resources`]；两边格式的翻译在 [`translate`]。
+//! - 第三阶段：用 Cindy 账号登录 [`login`]、插件操作 [`actions`]（同一时间只走一个流程，[`flow`]）、旧电脑批准与电脑增减的
+//!   提醒 [`approvals`]、加密的个人资料与头像 [`profile`]。
 
+mod actions;
+mod approvals;
 mod declare;
 mod errors;
+mod flow;
 mod log;
+mod login;
 mod methods;
 mod peer;
+mod profile;
 mod push;
 mod resources;
 mod session;
@@ -22,7 +29,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hhh_im_protocol::Method;
-use hhh_im_protocol::method::{LoginFailedParams, LoginStartResult};
 use hhh_im_protocol::rpc::{ErrorKind, RpcId, RpcMessage, codec};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
@@ -55,6 +61,12 @@ pub(crate) struct Server {
     pub(crate) state: RwLock<Option<Arc<session::Live>>>,
     pub(crate) uploads: resources::Uploads,
     pub(crate) sends: methods::Sends,
+    /// 正在走的登录或操作流程（至多一个）。
+    pub(crate) flows: flow::Flows,
+    /// 最近一次 `session/open` 设置里的服务器地址（登录要连它）。
+    pub(crate) server_url: std::sync::Mutex<Option<String>>,
+    /// 取过的头像与允许取头像的主机。
+    pub(crate) avatars: profile::Avatars,
     /// 正在处理的宿主请求（编号 → 任务），`$/cancel` 用。
     tasks: std::sync::Mutex<HashMap<String, AbortHandle>>,
 }
@@ -137,6 +149,9 @@ impl Server {
                 state: RwLock::new(None),
                 uploads: resources::Uploads::default(),
                 sends: methods::Sends::default(),
+                flows: flow::Flows::default(),
+                server_url: std::sync::Mutex::new(None),
+                avatars: profile::Avatars::default(),
                 tasks: std::sync::Mutex::new(HashMap::new()),
             }),
             writes,
@@ -182,12 +197,12 @@ impl Server {
                     self.peer.respond(cancel.id, Err(errors::of(ErrorKind::Cancelled, "宿主取消了这个请求。")));
                 }
             }
-            "login/cancel" | "login/submit" => tracing::debug!(method, "这一版没有登录流程，忽略"),
+            "login/submit" | "login/cancel" | "action/submit" | "action/cancel" | "step/choose" => self.flows.notified(method, params),
             other => tracing::debug!(method = other, "不认识的通知，忽略"),
         }
     }
 
-    /// 宿主发来的请求；回 `None` 表示已经自己回过了（`login/start`）。
+    /// 宿主发来的请求；回 `None` 表示已经自己回过了（`login/start`、`actions/start`：先回流程编号，再推第一步）。
     async fn handle(self: &Arc<Self>, id: &RpcId, method: &str, value: Value) -> Option<Result<Value, hhh_im_protocol::RpcError>> {
         let Some(known) = Method::from_name(method) else {
             return Some(Err(errors::method_not_found(method)));
@@ -207,16 +222,14 @@ impl Server {
                 Err(error) => Err(error),
             },
             Method::SessionLogout => self.session_logout().await,
-            Method::LoginStart => {
-                // 这一版还不能在 Friend 里登录（下一阶段用 Cindy 账号自动登录）：开一个流程，当场以不可重试的失败结束。
-                let flow = "friend-im-login".to_owned();
-                self.peer.respond(id.clone(), Ok(serde_json::to_value(LoginStartResult { flow_id: flow.clone() }).expect("结果总能写成 JSON")));
-                self.peer.notify(
-                    "login/failed",
-                    LoginFailedParams { flow_id: flow, message: "这一版的 Friend-IM 还不能在 Friend 里登录，下一版用 Cindy 账号自动登录。".into(), retryable: false },
-                );
-                return None;
-            }
+            Method::LoginStart => match params(value) {
+                Ok(p) => return self.login_start(id, p),
+                Err(error) => Err(error),
+            },
+            Method::ActionsStart => match params(value) {
+                Ok(p) => return self.actions_start(id, p).await,
+                Err(error) => Err(error),
+            },
             Method::ConversationsList => match params(value) {
                 Ok(p) => self.conversations_list(p).await,
                 Err(error) => Err(error),
@@ -243,6 +256,10 @@ impl Server {
             },
             Method::ResourcesRead => match params(value) {
                 Ok(p) => self.read_resource(p).await,
+                Err(error) => Err(error),
+            },
+            Method::AvatarsRead => match params(value) {
+                Ok(p) => self.read_avatar(p).await,
                 Err(error) => Err(error),
             },
             Method::UploadsBegin => match params(value) {
@@ -273,7 +290,7 @@ impl Server {
                 Ok(p) => self.messages_recall(p).await,
                 Err(error) => Err(error),
             },
-            // 没声明的能力（搜索、定位私聊、读单条、表情、头像、编辑、续期、重译）与插件发给宿主的方法。
+            // 没声明的能力（搜索、定位私聊、读单条、表情、编辑、续期、重译）与插件发给宿主的方法。
             _ => Err(errors::method_not_found(method)),
         })
     }

@@ -129,12 +129,12 @@ fn system() -> Sender {
     Sender { id: String::new(), id_type: None, kind: SenderKind::System, name: None }
 }
 
-/// 一条解开的消息 → 协议的消息。撤回动作本身（`Content::Recall`）不是一条给人看的消息，为 `None`：
-/// 被撤回的那条由 [`recalled`] 另外报。时间用服务器收到的时间（和按时间读历史同一把尺子）。
+/// 一条解开的消息 → 协议的消息。撤回动作本身（`Content::Recall`）与个人资料（`Content::Profile`）不是给人看的消息，
+/// 为 `None`：被撤回的那条由 [`recalled`] 另外报，个人资料只记下头像。时间用服务器收到的时间（和按时间读历史同一把尺子）。
 pub(crate) fn message(m: &Message, names: &Names) -> Option<Wire> {
     match &m.content {
         None => Some(recalled(m.conv.as_str(), &m.id, &m.sender, m.ts_ms, names)),
-        Some(Content::Recall { .. }) => None,
+        Some(Content::Recall { .. } | Content::Profile { .. }) => None,
         Some(Content::Post { parts, reply_to }) => Some(posted(m.conv.as_str(), &m.id, &m.sender, m.ts_ms, parts, reply_to.as_ref(), names)),
     }
 }
@@ -314,6 +314,7 @@ mod tests {
         let gone = message(&msg(None), &names).unwrap();
         assert!(gone.deleted && gone.content.is_empty());
         assert!(message(&msg(Some(Content::Recall { target: MsgId::from_raw([2; 16]) })), &names).is_none(), "撤回动作本身不显示");
+        assert!(message(&msg(Some(Content::Profile { avatar: Some("https://a.example.com/1.png".into()) })), &names).is_none(), "个人资料不显示");
         let bad = unreadable("c", &MsgId::from_raw([2; 16]), &uid(5), 5, &names);
         assert!(bad.incomplete);
         assert!(matches!(&bad.content[0], Block::Unsupported { .. }));

@@ -1,14 +1,15 @@
 //! 会话（protocol-v1 §4.2、§6）：用 HHH 交还的凭据连上服务器，在线期间的客户端、名字与会话资料的缓存，退出与下线。
 //!
-//! 这一版没有登录：没有凭据、凭据失效、换了服务器地址时都回 `needsLogin`，由下一阶段的“用 Cindy 账号自动登录”接上。
+//! 没有凭据、凭据失效、换了服务器地址时都回 `needsLogin`：宿主随即用 Cindy 账号自动登录（第三阶段，见 [`super::login`]）。
+//! 登录与重新打开都经 [`Server::go_live`] 上线，在线后补上待批准的新电脑（[`super::approvals`]）、发个人资料（[`super::profile`]）。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use friend_im_client::core::conv::ConvKind;
 use friend_im_client::core::ids::{ConvId, Uid};
-use friend_im_client::core::wire::{DeviceStatus, ErrorCode};
-use friend_im_client::{Client, ClientError, Config};
+use friend_im_client::core::wire::{DeviceStatus, ErrorCode, JoinRequestInfo};
+use friend_im_client::{Client, ClientError, Config, Updates};
 use hhh_im_protocol::method::{NeedsLoginReason, SessionOpenParams, SessionOpenResult};
 use hhh_im_protocol::rpc::{ErrorKind, RpcError};
 use hhh_im_protocol::types::{Account, Conversation, ConversationKind};
@@ -16,6 +17,7 @@ use serde_json::Value;
 use tokio::task::AbortHandle;
 
 use super::declare::{DEFAULT_SERVER, SETTING_SERVER};
+use super::profile::{Profiles, avatar_key};
 use super::translate::Names;
 use super::{Server, errors, push};
 use crate::credential::{self, Credential};
@@ -24,6 +26,8 @@ use crate::credential::{self, Credential};
 const CACHE_MAX: usize = 4096;
 /// 最近见过的消息（撤回推来时找原来那条的时间与发送人）记多少条。
 const RECENT_MAX: usize = 4096;
+/// 电脑增减的提醒至多留几条（契约 S4）。
+pub(crate) const DEVICE_NOTES_MAX: usize = 5;
 
 /// 最近见过的消息：编号 → （发送人，服务器时间），以及记下的先后（满了丢最早的）。
 #[derive(Default)]
@@ -38,10 +42,20 @@ pub(crate) struct Live {
     pub(crate) me: Uid,
     /// 是否借来的凭据（不能存新的）。
     pub(crate) read_only: bool,
+    /// 现在的凭据（存新登录凭证、记“个人资料发过了”时在它上面改）。
+    pub(crate) credential: Mutex<Credential>,
+    /// 收到的个人资料（别人的头像）。
+    pub(crate) profiles: Profiles,
+    /// 在等批准的新电脑：请求编号 → 请求（旧电脑这边，契约 S2）。
+    pub(crate) requests: Mutex<BTreeMap<String, JoinRequestInfo>>,
+    /// 电脑增减的提醒（契约 S4）：（编号，文字），看过“我的电脑”就拿掉。
+    pub(crate) device_notes: Mutex<Vec<(u64, String)>>,
+    /// 等着推给宿主的事件（推送任务与翻历史时认识的人都往这里放）。
+    pub(crate) outbox: Arc<push::Outbox>,
     names: Mutex<Names>,
     convs: Mutex<HashMap<ConvId, Conversation>>,
     recent: Mutex<Recent>,
-    /// 推送的两个后台任务（翻译更新、推给宿主），下线时停掉。
+    /// 推送的两个后台任务（翻译更新、推给宿主）与发个人资料的任务，下线时停掉。
     tasks: Mutex<Vec<AbortHandle>>,
 }
 
@@ -71,7 +85,15 @@ impl Live {
         wanted.into_iter().filter_map(|u| names.get(&u).map(|n| (u, n.clone()))).collect()
     }
 
-    /// 会话资料（缓存过就直接给）：群名是解开的群资料里的名字，私聊用对方的名字。
+    /// 这个人现在的头像键：自己用凭据里的，别人用收到的个人资料。
+    pub(crate) fn avatar_of(&self, uid: &Uid) -> Option<String> {
+        if *uid == self.me {
+            return self.credential.lock().expect("凭据锁中毒").avatar.as_deref().and_then(avatar_key);
+        }
+        self.profiles.avatar(uid)
+    }
+
+    /// 会话资料（缓存过就直接给）：群名是解开的群资料里的名字，私聊用对方的名字与头像。
     pub(crate) async fn conversation(&self, conv: &ConvId) -> Result<Conversation, ClientError> {
         if let Some(found) = self.convs.lock().expect("会话缓存锁中毒").get(conv) {
             return Ok(found.clone());
@@ -105,7 +127,7 @@ impl Live {
                     id: conv.to_string(),
                     kind: ConversationKind::Direct,
                     name: name.unwrap_or_else(|| "私聊".into()),
-                    avatar: None,
+                    avatar: peer.as_ref().and_then(|p| self.avatar_of(p)),
                     peer: peer.map(|p| p.to_string()),
                     private: false,
                 }
@@ -119,9 +141,21 @@ impl Live {
         Ok(built)
     }
 
-    /// 会话变了（建群、进出群、改群资料）：下次重新取。
+    /// 会话变了（建群、进出群、改群资料、对方换了头像）：下次重新取。
     pub(crate) fn forget_conversation(&self, conv: &ConvId) {
         self.convs.lock().expect("会话缓存锁中毒").remove(conv);
+    }
+
+    /// 和这个人的私聊（缓存里有的），对方换头像时重新推它。
+    pub(crate) fn direct_with(&self, uid: &Uid) -> Vec<ConvId> {
+        let peer = uid.to_string();
+        self.convs
+            .lock()
+            .expect("会话缓存锁中毒")
+            .iter()
+            .filter(|(_, c)| c.kind == ConversationKind::Direct && c.peer.as_deref() == Some(peer.as_str()))
+            .map(|(id, _)| id.clone())
+            .collect()
     }
 
     /// 是否已经知道这个会话（推送新会话的消息前先推会话本身）。
@@ -145,6 +179,11 @@ impl Live {
     /// 最近见过的某条消息的发送人与时间。
     pub(crate) fn recalled_from(&self, id: &str) -> Option<(Uid, i64)> {
         self.recent.lock().expect("最近消息锁中毒").seen.get(id).cloned()
+    }
+
+    /// 多一个后台任务（下线时一起停）。
+    pub(crate) fn hold(&self, task: AbortHandle) {
+        self.tasks.lock().expect("任务表锁中毒").push(task);
     }
 
     /// 停掉推送任务，断开服务器。
@@ -179,12 +218,18 @@ impl Server {
         }
     }
 
+    /// 最近一次 `session/open` 设置里的服务器地址（登录要连它）；没打开过用默认值。
+    pub(crate) fn server_url(&self) -> String {
+        self.server_url.lock().expect("服务器地址锁中毒").clone().unwrap_or_else(|| DEFAULT_SERVER.to_owned())
+    }
+
     /// `session/open`：用凭据连上服务器。
     pub(crate) async fn session_open(self: &Arc<Self>, params: SessionOpenParams) -> Result<Value, RpcError> {
         self.close_session().await;
         let server = server_setting(&params)?;
+        *self.server_url.lock().expect("服务器地址锁中毒") = Some(server.clone());
         let Some(text) = params.credential.as_deref() else {
-            return needs_login(NeedsLoginReason::NoCredential, "这一版的 Friend-IM 还不能在 Friend 里登录，下一版用 Cindy 账号自动登录。");
+            return needs_login(NeedsLoginReason::NoCredential, "用 Cindy 账号登录 Friend-IM。");
         };
         let Some(saved) = Credential::decode(text) else {
             tracing::warn!("凭据读不懂（格式或版本不对），要重新登录");
@@ -210,28 +255,56 @@ impl Server {
                 };
             }
         };
-        let me = client.uid().clone();
         let status = client.status().await;
-        if me.as_str() != saved.uid || status != DeviceStatus::Active {
+        if client.uid().as_str() != saved.uid || status != DeviceStatus::Active {
             tracing::warn!(?status, "凭据的账号对不上，或这台电脑还不能用");
             client.close();
             return needs_login(NeedsLoginReason::CredentialInvalid, "这台电脑还没开通或还没被批准，要重新登录。");
         }
-        let account = Account { id: me.to_string(), id_type: None, name: client.name().await, avatar: None, tenant: None };
+        let account = self.go_live(client, updates, saved, params.credential_read_only).await;
+        Ok(serde_json::to_value(SessionOpenResult::Online { account, adopted_settings: None }).expect("结果总能写成 JSON"))
+    }
+
+    /// 上线（重新打开与登录完成共用）：记下在线的账号、开始推送；之后在后台补上待批准的新电脑、发个人资料。返回账号。
+    pub(crate) async fn go_live(self: &Arc<Self>, client: Client, updates: Updates, saved: Credential, read_only: bool) -> Account {
+        let me = client.uid().clone();
+        self.avatars.allow_host_of(saved.avatar.as_deref());
+        let account = Account {
+            id: me.to_string(),
+            id_type: None,
+            name: client.name().await,
+            avatar: saved.avatar.as_deref().and_then(avatar_key),
+            tenant: None,
+        };
         let live = Arc::new(Live {
             client,
             me,
-            read_only: params.credential_read_only,
+            read_only,
+            credential: Mutex::new(saved),
+            profiles: Profiles::default(),
+            requests: Mutex::new(BTreeMap::new()),
+            device_notes: Mutex::new(Vec::new()),
+            outbox: Arc::new(push::Outbox::default()),
             names: Mutex::new(Names::new()),
             convs: Mutex::new(HashMap::new()),
             recent: Mutex::new(Default::default()),
             tasks: Mutex::new(Vec::new()),
         });
-        let tasks = push::start(self.clone(), live.clone(), updates, saved);
+        let tasks = push::start(self.clone(), live.clone(), updates);
         live.tasks.lock().expect("任务表锁中毒").extend(tasks);
-        *self.state.write().await = Some(live);
+        if let Some(old) = self.state.write().await.replace(live.clone()) {
+            old.close();
+        }
         tracing::info!("Friend-IM 已上线");
-        Ok(serde_json::to_value(SessionOpenResult::Online { account, adopted_settings: None }).expect("结果总能写成 JSON"))
+        let (server, after_live) = (self.clone(), live.clone());
+        let after = tokio::spawn(async move {
+            server.refresh_requests(&after_live).await;
+            if !after_live.read_only {
+                server.announce_profile(&after_live).await;
+            }
+        });
+        live.hold(after.abort_handle());
+        account
     }
 
     /// `session/logout`：这台电脑退出 Friend-IM（从“我的电脑”里移除，契约 S22），再下线。
@@ -243,5 +316,17 @@ impl Server {
         }
         self.close_session().await;
         Ok(serde_json::json!({}))
+    }
+
+    /// 存一份凭据（`credential/save`）：宿主写好了才回成功。
+    ///
+    /// # Errors
+    /// 宿主没存下时返回给人看的原因。
+    pub(crate) async fn save_credential(&self, credential: &Credential) -> Result<(), String> {
+        let params = hhh_im_protocol::method::CredentialSaveParams { credential: credential.encode(), renew_at_ms: None };
+        self.peer.request("credential/save", &params).await.map(|_| ()).map_err(|error| {
+            tracing::error!(?error, "宿主没存下 Friend-IM 的凭据");
+            "Friend 没存下登录信息，请重试。".to_owned()
+        })
     }
 }

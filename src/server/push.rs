@@ -6,6 +6,8 @@
 //!   插件重启后从这里接着补，不会跳过没推出去的。
 //! - 新会话先推会话本身再推它的消息；自己退群或被移出时推“会话没有了”（宿主只记下，不删本地记录）。
 //! - 连接状态（连上、断开重连）当场发 `status` 通知，不排队。
+//! - 第三阶段：个人资料不当成消息，记下发送人的头像、推 `people`（[`super::profile`]）；新电脑批准与自己账号的电脑增减交给
+//!   [`super::approvals`]（`session/notice` 的待处理行）。
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -14,17 +16,17 @@ use std::time::Duration;
 use friend_im_client::core::ids::{ConvId, MsgId, Uid};
 use friend_im_client::core::message::Content;
 use friend_im_client::core::wire::DeviceStatus;
-use friend_im_client::{ConvNotice, HistoryItem, Message, Notice, Update, Updates};
-use hhh_im_protocol::method::{ConnState, CredentialSaveParams, EventsPushParams, SessionExpiredParams, StatusParams};
+use friend_im_client::{AccountNotice, ConvNotice, HistoryItem, Message, Notice, Update, Updates};
+use hhh_im_protocol::method::{ConnState, EventsPushParams, SessionExpiredParams, StatusParams};
 use hhh_im_protocol::rpc::ReauthReason;
-use hhh_im_protocol::types::{Event, Message as Wire};
+use hhh_im_protocol::types::{Event, Message as Wire, Person, PersonKind};
 use tokio::sync::Notify;
 use tokio::task::AbortHandle;
 
 use super::Server;
+use super::flow::{Input, JoinEvent};
 use super::session::Live;
 use super::translate;
-use crate::credential::Credential;
 
 /// 一批至多几个事件（protocol-v1 §11.1）。
 const BATCH_MAX: usize = 500;
@@ -39,7 +41,7 @@ pub(crate) struct Outbox {
 }
 
 impl Outbox {
-    fn push(&self, event: Event) {
+    pub(crate) fn push(&self, event: Event) {
         self.queue.lock().expect("推送队列锁中毒").0.push_back(event);
         self.wake.notify_one();
     }
@@ -61,10 +63,10 @@ impl Outbox {
     }
 }
 
-/// 开始推送：一个任务把更新翻成事件，一个任务推给宿主。返回两个任务，下线时停掉。
-pub(crate) fn start(server: Arc<Server>, live: Arc<Live>, updates: Updates, saved: Credential) -> Vec<AbortHandle> {
-    let outbox = Arc::new(Outbox::default());
-    let translator = tokio::spawn(translate_updates(server.clone(), live, updates, outbox.clone(), saved));
+/// 开始推送：一个任务把更新翻成事件（进 `live` 的队列），一个任务推给宿主。返回两个任务，下线时停掉。
+pub(crate) fn start(server: Arc<Server>, live: Arc<Live>, updates: Updates) -> Vec<AbortHandle> {
+    let outbox = live.outbox.clone();
+    let translator = tokio::spawn(translate_updates(server.clone(), live, updates));
     let sender = tokio::spawn(send_batches(server, outbox));
     vec![translator.abort_handle(), sender.abort_handle()]
 }
@@ -90,7 +92,8 @@ async fn send_batches(server: Arc<Server>, outbox: Arc<Outbox>) {
 }
 
 /// 把客户端库的更新翻成事件，直到客户端停了。
-async fn translate_updates(server: Arc<Server>, live: Arc<Live>, mut updates: Updates, outbox: Arc<Outbox>, saved: Credential) {
+async fn translate_updates(server: Arc<Server>, live: Arc<Live>, mut updates: Updates) {
+    let outbox = live.outbox.clone();
     while let Some(update) = updates.recv().await {
         match update {
             Update::Connected { status } => {
@@ -110,13 +113,20 @@ async fn translate_updates(server: Arc<Server>, live: Arc<Live>, mut updates: Up
                 let wire = translate::unreadable(conv.as_str(), &id, &sender, ts_ms, &names);
                 outbox.push(Event::Messages { conversation_id: conv.to_string(), messages: vec![wire] });
             }
-            Update::Conv(notice) => on_notice(&live, &outbox, notice).await,
+            Update::Conv(notice) => {
+                // 刚进的会话：发一条个人资料（在后台发，不挡推送）。
+                if joined(&live.me, &notice) {
+                    let (server, live, conv) = (server.clone(), live.clone(), notice.conv.clone());
+                    tokio::spawn(async move { server.announce_to(&live, &conv).await });
+                }
+                on_notice(&live, &outbox, notice).await;
+            }
             Update::ConvRejected { conv, log, reason } => {
                 tracing::warn!(%conv, log, %reason, "会话签名链有一环没通过核对，已拒绝");
                 let at = crate::server::now_ms();
                 outbox.push(Event::Messages { conversation_id: conv.to_string(), messages: vec![translate::conv_rejected(conv.as_str(), log, at)] });
             }
-            Update::CredentialsChanged => save_credentials(&server, &live, &saved).await,
+            Update::CredentialsChanged => save_credentials(&server, &live).await,
             Update::DeviceRemoved => {
                 expire(&server, ReauthReason::Revoked, "这台电脑已被移出你的 Friend-IM 账号，要重新登录。").await;
                 return;
@@ -125,11 +135,18 @@ async fn translate_updates(server: Arc<Server>, live: Arc<Live>, mut updates: Up
                 expire(&server, ReauthReason::Expired, "Friend-IM 的登录已失效，要重新登录。").await;
                 return;
             }
-            // 账号与电脑的提醒、新电脑批准在下一阶段接（要协议 v13 的插件操作）。
-            Update::Activated | Update::Account { .. } => {}
-            Update::JoinRequested(_) | Update::JoinRetry { .. } | Update::JoinWrongCode { .. } | Update::JoinClosed { .. } => {
-                tracing::debug!("新电脑批准的推送，这一版不处理");
-            }
+            Update::Account { uid, notice, .. } if uid == live.me => match notice {
+                AccountNotice::DeviceAdded { name, device } if device != *live.client.device_id() => {
+                    server.device_changed(&live, format!("你的账号新增了电脑「{name}」"));
+                }
+                AccountNotice::DeviceRemoved { name, .. } => server.device_changed(&live, format!("已移除电脑「{name}」")),
+                _ => {}
+            },
+            // 聊过的人重置账号：会话里的系统提示另外推来（MemberReset），这里不用管。
+            Update::Account { .. } | Update::Activated | Update::JoinWrongCode { .. } => {}
+            Update::JoinRequested(info) => server.join_requested(&live, info),
+            Update::JoinRetry { request, attempt } => server.flows.send_to_action(Input::Join(JoinEvent::Retry { request, attempt })),
+            Update::JoinClosed { request, reason } => server.join_closed(&live, request, reason),
         }
     }
     tracing::info!("客户端停了，推送结束");
@@ -151,6 +168,11 @@ async fn push_conversation(live: &Live, outbox: &Outbox, conv: &ConvId) {
 }
 
 async fn on_message(live: &Live, outbox: &Outbox, message: Message) {
+    if let Some(Content::Profile { avatar }) = &message.content {
+        // 个人资料不是给人看的消息：记下这个人的头像，变了就告诉宿主（人与私聊会话）。
+        profile_seen(live, &message.sender, message.log, avatar.as_deref()).await;
+        return;
+    }
     ensure_conversation(live, outbox, &message.conv).await;
     if let Some(Content::Recall { target }) = &message.content {
         if let Some(wire) = recalled(live, &message, target).await {
@@ -164,6 +186,20 @@ async fn on_message(live: &Live, outbox: &Outbox, message: Message) {
     };
     live.remember(&wire.id, &message.sender, message.ts_ms);
     outbox.push(Event::Messages { conversation_id: message.conv.to_string(), messages: vec![wire] });
+}
+
+/// 见到一份个人资料（推来的或翻历史翻到的）：比记下的新、头像变了就推这个人与和他的私聊。
+pub(crate) async fn profile_seen(live: &Live, sender: &Uid, log: u64, avatar: Option<&str>) {
+    if *sender == live.me || !live.profiles.note(sender, log, avatar) {
+        return;
+    }
+    let names = live.names([sender.clone()]).await;
+    let person = Person { id: sender.to_string(), id_type: None, kind: PersonKind::User, name: names.get(sender).cloned(), avatar: live.avatar_of(sender) };
+    live.outbox.push(Event::People { people: vec![person] });
+    for conv in live.direct_with(sender) {
+        live.forget_conversation(&conv);
+        push_conversation(live, &live.outbox, &conv).await;
+    }
 }
 
 /// 一条消息里要显示名字的人：发送人与被提及的人。
@@ -211,6 +247,15 @@ async fn search(live: &Live, recall: &Message, target: &MsgId) -> Option<(Uid, i
     None
 }
 
+/// 这条提示是不是“我进了这个会话”（建会话时在成员里、被邀请、凭链接加入）。
+fn joined(me: &Uid, notice: &Notice) -> bool {
+    match &notice.change {
+        ConvNotice::Created { members, .. } | ConvNotice::Added { members } => members.contains(me),
+        ConvNotice::JoinedByInvite => notice.author == *me,
+        _ => false,
+    }
+}
+
 /// 会话里的系统提示：会话本身变了就重新推会话（自己离开了就推“会话没有了”），再推这条提示。
 async fn on_notice(live: &Live, outbox: &Outbox, notice: Notice) {
     let conv = notice.conv.clone();
@@ -240,16 +285,20 @@ async fn on_notice(live: &Live, outbox: &Outbox, notice: Notice) {
     }
 }
 
-/// 服务器换发了登录凭证：交给宿主存（借来的凭据不存，到期再说）。
-async fn save_credentials(server: &Server, live: &Live, saved: &Credential) {
+/// 服务器换发了登录凭证：交给宿主存（借来的凭据不存，到期再说）。头像与“发过的个人资料”照旧带上。
+async fn save_credentials(server: &Server, live: &Live) {
     if live.read_only {
         tracing::info!("凭据是借来的，不存新的登录凭证");
         return;
     }
-    let credential = Credential::new(&saved.server, &saved.uid, &saved.device_name, live.client.credentials().await);
-    let params = CredentialSaveParams { credential: credential.encode(), renew_at_ms: None };
-    if let Err(error) = server.peer.request("credential/save", &params).await {
-        tracing::error!(?error, "宿主没存下新的登录凭证，下次启动可能要重新登录");
+    let device = live.client.credentials().await;
+    let credential = {
+        let mut current = live.credential.lock().expect("凭据锁中毒");
+        current.device = device;
+        current.clone()
+    };
+    if server.save_credential(&credential).await.is_err() {
+        tracing::error!("宿主没存下新的登录凭证，下次启动可能要重新登录");
     }
 }
 

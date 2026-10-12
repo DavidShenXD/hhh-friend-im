@@ -23,6 +23,8 @@ pub const MESSAGE_VERSION: u32 = 1;
 pub const ENVELOPE_CT_MAX: usize = 80 * 1024;
 /// 一条消息里正文段数的上限。
 pub const PARTS_MAX: usize = 256;
+/// 个人资料里头像地址的上限（字节）。
+pub const AVATAR_URL_MAX: usize = 1024;
 
 /// 正文的一段，对应 HHH 协议的消息块（文字、提及、资源）。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,10 +82,22 @@ pub enum Content {
         /// 被撤回的消息。
         target: MsgId,
     },
+    /// 发送人的个人资料（第三阶段，契约 S1“名字和头像沿用 Cindy”）：和普通消息一样只有会话里的人解得开，服务器看不出它是
+    /// 个人资料。现在只有头像地址；没有头像时为空（把以前的撤掉）。不给人看，收到的一方按发送人记最新的一份。
+    Profile {
+        /// 头像地址（https，至多 [`AVATAR_URL_MAX`] 字节）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        avatar: Option<String>,
+    },
 }
 
 impl Content {
     fn check(&self) -> Result<()> {
+        if let Self::Profile { avatar: Some(url) } = self
+            && (!url.starts_with("https://") || url.len() > AVATAR_URL_MAX || url.chars().any(|c| c.is_whitespace() || c.is_control()))
+        {
+            return Err(CoreError::format("头像地址不对"));
+        }
         if let Self::Post { parts, .. } = self {
             if parts.is_empty() || parts.len() > PARTS_MAX {
                 return Err(CoreError::format("消息正文段数不对"));
@@ -164,7 +178,7 @@ impl Envelope {
         body.content.check()?;
         let recall = match &body.content {
             Content::Recall { target } => Some(target.clone()),
-            Content::Post { .. } => None,
+            Content::Post { .. } | Content::Profile { .. } => None,
         };
         let device = sender.device.id();
         let head = header(conv, &id, generation, sender.uid, &sender.eldest, &device, recall.as_ref());
@@ -214,7 +228,7 @@ impl Envelope {
         // 明文消息头里的撤回目标必须和加了密的正文一致。
         let inner_recall = match &body.content {
             Content::Recall { target } => Some(target),
-            Content::Post { .. } => None,
+            Content::Post { .. } | Content::Profile { .. } => None,
         };
         if inner_recall != self.recall.as_ref() {
             return Err(CoreError::format("撤回目标前后不一致"));
@@ -356,5 +370,30 @@ mod tests {
         ));
         let max_text = text(&"a".repeat(64 * 1024));
         assert!(Envelope::seal(&ConvId::random(), MsgId::random(), 1, &seed, &sender, &max_text).is_ok());
+    }
+
+    // 第三阶段：个人资料和普通消息一样加密、签名；密文里找不到头像地址；头像地址只收 https、不太长；写法固定。
+    #[test]
+    fn a_profile_is_sealed_like_a_message_and_its_avatar_is_checked() {
+        let (uid, device) = sender_parts();
+        let conv = ConvId::random();
+        let seed = ConvSeed::generate();
+        let sender = Sender {
+            uid: &uid,
+            eldest: Fixed([1; 32]),
+            device: &device,
+        };
+        let url = "https://avatar.example.com/u/abc.png";
+        let body = MessageBody { v: MESSAGE_VERSION, ctime_ms: 1, content: Content::Profile { avatar: Some(url.into()) } };
+        let envelope = Envelope::seal(&conv, MsgId::random(), 1, &seed, &sender, &body).unwrap();
+        assert_eq!(envelope.open(&seed, &device.public()).unwrap(), body);
+        assert!(!serde_json::to_string(&envelope).unwrap().contains("avatar.example.com"), "服务器看不到头像地址");
+        assert_eq!(serde_json::to_value(&body.content).unwrap(), serde_json::json!({ "type": "profile", "avatar": url }));
+        let cleared = Content::Profile { avatar: None };
+        assert_eq!(serde_json::to_value(&cleared).unwrap(), serde_json::json!({ "type": "profile" }));
+        for bad in ["http://avatar.example.com/a.png".to_owned(), format!("https://a.com/{}", "x".repeat(AVATAR_URL_MAX)), "https://a.com/a b".into()] {
+            let body = MessageBody { v: MESSAGE_VERSION, ctime_ms: 1, content: Content::Profile { avatar: Some(bad.clone()) } };
+            assert!(Envelope::seal(&conv, MsgId::random(), 1, &seed, &sender, &body).is_err(), "{bad}");
+        }
     }
 }

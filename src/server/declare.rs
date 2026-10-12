@@ -4,17 +4,20 @@
 //! - 每条消息能回复；本人发的能撤回，不限时（服务器上的密文随之删除）。不能编辑、不能点表情、没有话题。
 //! - 附件上限与服务器一致：图片、文件都到 100 MiB；文件名按字节算，255 字节以内（服务器按 255 个字收）。
 //! - 设置只有一项：服务器地址，默认填用户自己部署的那台。
+//! - 第三阶段：只有一种登录方式“用 Cindy 账号登录”（`host`，[`super::login`]）；账号级操作五项、群的操作三项
+//!   （[`super::actions`]）；能读头像（头像键是 Cindy 头像地址）、会推“人变了”（收到别人的个人资料）。
 
 use friend_im_client::core::limits;
-use hhh_im_protocol::method::{InitializeParams, InitializeResult, ProviderInfo};
+use hhh_im_protocol::method::{ActionDecl, ActionScope, InitializeParams, InitializeResult, ProviderInfo};
 use hhh_im_protocol::platform::{
     ActionRules, AvatarShape, Capabilities, ConversationCaps, DiscoveryDesc, EventCaps, HistoryMode, Limits, MessageCaps,
     OwnWithin, PeopleCaps, PlatformDesc, RateBudget, ResourceCaps, SendCaps, SettingDecl,
 };
 use hhh_im_protocol::rpc::{ErrorKind, RpcError};
+use hhh_im_protocol::types::ConversationKind;
 use serde_json::Value;
 
-use super::errors;
+use super::{actions, errors, login};
 
 /// 插件编号（同清单 `id`）。
 pub(crate) const PROVIDER_ID: &str = "friend-im";
@@ -71,7 +74,7 @@ pub(crate) fn platform() -> PlatformDesc {
     }
 }
 
-/// 能力：做得到的都声明，做不到的（搜索、编辑、表情、头像、定位私聊）不声明。
+/// 能力：做得到的都声明，做不到的（搜索、编辑、表情、定位私聊）不声明。
 pub(crate) fn capabilities() -> Capabilities {
     Capabilities {
         conversations: ConversationCaps { list: true, search: false, members: true, find_direct: false, recent_activity: true },
@@ -81,8 +84,8 @@ pub(crate) fn capabilities() -> Capabilities {
         recall: true,
         edit: false,
         reactions: Default::default(),
-        resources: ResourceCaps { read: true, avatars: false },
-        events: EventCaps { messages: true, deletions: false, reactions: false, conversations: true, people: false },
+        resources: ResourceCaps { read: true, avatars: true },
+        events: EventCaps { messages: true, deletions: false, reactions: false, conversations: true, people: true },
         retranslate: false,
         session: Default::default(),
     }
@@ -103,6 +106,27 @@ pub(crate) fn settings() -> Vec<SettingDecl> {
     }]
 }
 
+/// 插件的操作（原型 friend-im-v2）：账号级的进“管理”菜单，群的三项进群的会话菜单（私聊没有菜单）。
+pub(crate) fn actions() -> Vec<ActionDecl> {
+    let account = |id: &str, label: &str| ActionDecl { id: id.into(), label: label.into(), scope: ActionScope::Account, conversation_kinds: Vec::new() };
+    let group = |id: &str, label: &str| ActionDecl {
+        id: id.into(),
+        label: label.into(),
+        scope: ActionScope::Conversation,
+        conversation_kinds: vec![ConversationKind::Group],
+    };
+    vec![
+        account(actions::DEVICES, "我的电脑"),
+        account(actions::LINK, "我的好友链接"),
+        account(actions::ADD, "加好友"),
+        account(actions::GROUP, "新建群"),
+        account(actions::ABOUT, "关于加密"),
+        group(actions::MEMBERS, "群成员"),
+        group(actions::INVITE, "邀请成员"),
+        group(actions::LEAVE, "退出群"),
+    ]
+}
+
 /// 握手结果。
 pub(crate) fn result() -> InitializeResult {
     InitializeResult {
@@ -111,7 +135,8 @@ pub(crate) fn result() -> InitializeResult {
         platform: platform(),
         capabilities: capabilities(),
         settings: settings(),
-        login_methods: Vec::new(),
+        login_methods: login::login_methods(),
+        actions: actions(),
     }
 }
 
@@ -136,7 +161,18 @@ mod tests {
         assert_eq!(result["capabilities"]["messages"]["list"], true, "history=server 必须能读消息（§5.2）");
         assert_eq!(result["capabilities"]["conversations"]["recentActivity"], true, "声明了会话发现就要能答");
         assert_eq!(result["settings"][0]["default"], DEFAULT_SERVER);
-        assert!(result.get("loginMethods").is_none(), "这一版没有登录方式");
+        assert_eq!(result["loginMethods"][0]["kind"], "host", "只有用 Cindy 账号登录");
+        assert_eq!(result["loginMethods"].as_array().unwrap().len(), 1);
+        assert_eq!(result["capabilities"]["resources"]["avatars"], true);
+        assert_eq!(result["capabilities"]["events"]["people"], true);
+        let actions = actions();
+        assert_eq!(actions.len(), 8);
+        for decl in &actions {
+            assert_eq!(hhh_im_protocol::method::action_problem(decl), None, "{decl:?}");
+        }
+        let ids: std::collections::HashSet<&str> = actions.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids.len(), actions.len(), "编号不重复");
+        assert!(actions.iter().filter(|a| a.scope == ActionScope::Conversation).all(|a| a.applies_to(ConversationKind::Group) && !a.applies_to(ConversationKind::Direct)));
         // 清单与握手的编号、名字一致。
         let manifest: Value = serde_json::from_str(include_str!("../../hhh-im-provider.json")).unwrap();
         assert_eq!(manifest["id"], PROVIDER_ID);
