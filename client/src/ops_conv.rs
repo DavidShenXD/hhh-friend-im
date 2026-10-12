@@ -439,6 +439,22 @@ impl State {
         })
     }
 
+    /// 我重置账号之前就在、还记着我旧身份的群（契约 S7：重置后退出所有群，要群里的人重新邀请）。
+    pub async fn groups_left_by_reset(&mut self, conn: &Conn) -> Result<Vec<ConvId>> {
+        let me = self.my_ref(conn).await?;
+        let mut left = Vec::new();
+        for summary in self.convs(conn).await? {
+            if summary.kind != ConvKind::Group {
+                continue;
+            }
+            self.book.conv(conn, &summary.conv).await?;
+            if self.reset_here(&summary.conv, &me) {
+                left.push(summary.conv);
+            }
+        }
+        Ok(left)
+    }
+
     /// 我所在（和离开过）的会话。
     pub async fn convs(&mut self, conn: &Conn) -> Result<Vec<ConvSummary>> {
         self.require_active()?;

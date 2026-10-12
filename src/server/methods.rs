@@ -141,7 +141,9 @@ impl Server {
         let live = self.live().await?;
         let offset = offset_of(params.cursor.as_deref())?;
         let summaries = live.client.convs().await.map_err(|e| errors::client(&e))?;
-        let ids: Vec<ConvId> = summaries.into_iter().filter(|s| s.member).map(|s| s.conv).collect();
+        // 重置过账号后退出的群不再列（契约 S7）。
+        let left = live.client.groups_left_by_reset().await.map_err(|e| errors::client(&e))?;
+        let ids: Vec<ConvId> = summaries.into_iter().filter(|s| s.member && !left.contains(&s.conv)).map(|s| s.conv).collect();
         let page = slice(ids, offset, params.limit.min(100));
         let mut items = Vec::with_capacity(page.items.len());
         for conv in &page.items {

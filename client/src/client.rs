@@ -279,6 +279,11 @@ impl Client {
         self.call(async |s, c| s.add_friend(c, link).await).await
     }
 
+    /// 重置账号之前就在、还记着旧身份的群：重置后已经用不了（契约 S7）。
+    pub async fn groups_left_by_reset(&self) -> Result<Vec<ConvId>> {
+        self.call(async |s, c| s.groups_left_by_reset(c).await).await
+    }
+
     /// 和群成员私聊（契约 S10），返回私聊。
     pub async fn open_dm(&self, uid: &Uid, group: &ConvId) -> Result<ConvId> {
         self.call(async |s, c| s.open_dm(c, uid, group).await).await

@@ -68,6 +68,9 @@ impl Outbox {
 /// 开始推送：一个任务把更新翻成事件（进 `live` 的队列），一个任务推给宿主。返回两个任务，下线时停掉。
 pub(crate) fn start(server: Arc<Server>, live: Arc<Live>, updates: Updates) -> Vec<AbortHandle> {
     let outbox = live.outbox.clone();
+    // 上线时已经连着（登录、重置刚做完）就收不到这一次的“连上了”：先看一次重置后退出的群。
+    let checking = live.clone();
+    tokio::spawn(async move { drop_groups_left_by_reset(&checking).await });
     let translator = tokio::spawn(translate_updates(server.clone(), live, updates));
     let sender = tokio::spawn(send_batches(server, outbox));
     vec![translator.abort_handle(), sender.abort_handle()]
@@ -103,6 +106,8 @@ async fn translate_updates(server: Arc<Server>, live: Arc<Live>, mut updates: Up
                 if status != DeviceStatus::Active {
                     tracing::warn!(?status, "重连后这台电脑不能用了");
                 }
+                let live = live.clone();
+                tokio::spawn(async move { drop_groups_left_by_reset(&live).await });
             }
             Update::Disconnected => {
                 server.peer.notify("status", StatusParams { state: ConnState::Connecting, reason: Some("和 Friend-IM 服务器断开了，正在重连".into()) });
@@ -250,6 +255,20 @@ async fn search(live: &Live, recall: &Message, target: &MsgId) -> Option<(Uid, i
         before = page.items.iter().map(HistoryItem::log).min();
     }
     None
+}
+
+/// 重置过账号就退出了所有群（契约 S7）：还记着我旧身份的群推“会话没有了”（宿主只记下，不删本地记录）。每次连上看一次，
+/// 推重了无妨。
+async fn drop_groups_left_by_reset(live: &Live) {
+    match live.client.groups_left_by_reset().await {
+        Ok(groups) => {
+            for conv in groups {
+                live.forget_conversation(&conv);
+                live.outbox.push(Event::ConversationRemoved { conversation_id: conv.to_string() });
+            }
+        }
+        Err(error) => tracing::info!(%error, "重置后退出的群没查成，下次连上再看"),
+    }
 }
 
 /// 这条提示是不是“我离开了这个会话”（自己退群、被移出）。
