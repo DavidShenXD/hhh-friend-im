@@ -11,6 +11,7 @@ use friend_im_core::ids::{DeviceId, MsgId, Uid};
 use friend_im_core::keys::{DevicePublic, DeviceSecret};
 use friend_im_core::message::Envelope;
 use serde::{Deserialize, Serialize};
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::mpsc;
@@ -461,12 +462,15 @@ fn announcement_data(announcement: &Announcement) -> Vec<u8> {
 }
 
 fn discovery_socket() -> std::io::Result<UdpSocket> {
-    let socket =
-        std::net::UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT))?;
+    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_reuse_address(true)?;
+    #[cfg(unix)]
+    socket.set_reuse_port(true)?;
+    socket.bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DISCOVERY_PORT).into())?;
     socket.set_nonblocking(true)?;
     socket.set_multicast_loop_v4(true)?;
     socket.join_multicast_v4(&DISCOVERY_GROUP, &Ipv4Addr::UNSPECIFIED)?;
-    UdpSocket::from_std(socket)
+    UdpSocket::from_std(socket.into())
 }
 
 fn invalid_data(error: impl Into<String>) -> std::io::Error {
