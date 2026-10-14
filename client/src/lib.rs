@@ -39,6 +39,7 @@ mod conn;
 mod error;
 mod files;
 mod keyring;
+mod lan;
 mod links;
 mod ops_account;
 mod ops_conv;

@@ -21,6 +21,7 @@ use crate::book::Book;
 use crate::conn::{self, Conn};
 use crate::error::{ClientError, Result};
 use crate::keyring::Keyring;
+use crate::lan::{DirectInbound, Lan};
 use crate::links::{FriendLink, InviteLink, http_base, ws_url};
 use crate::state::{Flow, State};
 use crate::types::{ConvInfo, Config, Credentials, HistoryPage, Update};
@@ -38,6 +39,7 @@ pub(crate) struct Inner {
     ws: String,
     uid: Uid,
     device: DeviceId,
+    pub(crate) lan: Arc<Lan>,
     stopped: AtomicBool,
 }
 
@@ -91,6 +93,14 @@ impl Client {
         let connected = conn::connect(&ws, auth, &creds.device, &config.device_name).await?;
         let welcome = connected.welcome;
         let (updates, rx) = mpsc::unbounded_channel();
+        let (direct_tx, direct_rx) = mpsc::unbounded_channel();
+        let lan = match Lan::start(welcome.uid.clone(), creds.device.clone(), direct_tx).await {
+            Ok(lan) => lan,
+            Err(error) => {
+                tracing::info!(%error, "局域网直连不可用，自动使用服务器中转");
+                Lan::disabled(welcome.uid.clone(), creds.device.clone())
+            }
+        };
         if let Some(session) = welcome.session.clone() {
             creds.session = Some(session);
             let _ = updates.send(Update::CredentialsChanged);
@@ -114,6 +124,8 @@ impl Client {
             approvals: HashMap::new(),
             updates,
             clock: connected.clock,
+            seen_messages: std::collections::HashSet::new(),
+            seen_order: std::collections::VecDeque::new(),
         };
         let inner = Arc::new(Inner {
             state: tokio::sync::Mutex::new(state),
@@ -126,6 +138,7 @@ impl Client {
             ws,
             uid: welcome.uid,
             device,
+            lan,
             stopped: AtomicBool::new(false),
         });
         if welcome.status == DeviceStatus::Active {
@@ -138,7 +151,7 @@ impl Client {
                 }
             }
         }
-        tokio::spawn(supervise(inner.clone(), connected.pushes));
+        tokio::spawn(supervise(inner.clone(), connected.pushes, direct_rx));
         Ok((Self { inner }, rx))
     }
 
@@ -361,7 +374,8 @@ impl Client {
 
     /// 发消息，返回（日志序号，服务器时间）。同一次发送重试时用同一个 `id`。
     pub async fn send(&self, conv: &ConvId, id: &MsgId, content: Content) -> Result<(u64, i64)> {
-        self.call(async |s, c| s.send(c, conv, id, content).await).await
+        let lan = self.inner.lan.clone();
+        self.call(async move |s, c| s.send(c, conv, id, content, &lan).await).await
     }
 
     /// 撤回自己的一条消息。
@@ -404,7 +418,7 @@ impl Client {
 }
 
 /// 后台：处理推送；断了就重连、补拉，直到停止。
-async fn supervise(inner: Arc<Inner>, mut pushes: mpsc::Receiver<Push>) {
+async fn supervise(inner: Arc<Inner>, mut pushes: mpsc::Receiver<Push>, mut direct: mpsc::UnboundedReceiver<DirectInbound>) {
     loop {
         // 这一轮连接自己的对象：连接关了也要把它推来的东西处理完——服务器移除电脑时先推“已被移出”再关连接。
         let Some(conn) = inner.conn.lock().unwrap_or_else(|p| p.into_inner()).clone() else { return };
@@ -415,12 +429,22 @@ async fn supervise(inner: Arc<Inner>, mut pushes: mpsc::Receiver<Push>) {
                 conn.close();
             }
         }
-        while let Some(push) = pushes.recv().await {
-            let mut state = inner.state.lock().await;
-            if state.handle_push(&conn, push).await == Flow::Stop {
-                drop(state);
-                inner.stop();
-                return;
+        loop {
+            tokio::select! {
+                push = pushes.recv() => {
+                    let Some(push) = push else { break };
+                    let mut state = inner.state.lock().await;
+                    if state.handle_push(&conn, push).await == Flow::Stop {
+                        drop(state);
+                        inner.stop();
+                        return;
+                    }
+                }
+                message = direct.recv() => {
+                    let Some(message) = message else { continue };
+                    let mut state = inner.state.lock().await;
+                    state.handle_direct(&conn, message).await;
+                }
             }
         }
         inner.set_conn(None);

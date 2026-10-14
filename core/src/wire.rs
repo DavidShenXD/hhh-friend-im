@@ -20,7 +20,7 @@ use crate::bytes::{Bytes, Fixed};
 use crate::conv::{ConvKind, ConvLink};
 use crate::crypto::{self, Sealed, ctx};
 use crate::error::Result;
-use crate::ids::{ConvId, DeviceId, FileId, InviteId, RequestId, Uid};
+use crate::ids::{ConvId, DeviceId, FileId, InviteId, MsgId, RequestId, Uid};
 use crate::keys::{DevicePublic, DeviceSecret};
 use crate::message::Envelope;
 
@@ -350,6 +350,24 @@ pub enum Request {
     Send {
         /// 信封。
         env: Envelope,
+    },
+    /// 直连发送的第一步：只落库，暂不向任何在线电脑推送。
+    ///
+    /// 客户端随后把服务器返回的日志序号提交给已经完成局域网暂存的电脑，
+    /// 再用 [`ReleaseMessage`] 向没有直连成功的电脑补发。
+    SendLan {
+        /// 信封。
+        env: Envelope,
+    },
+    /// 释放一条已落库的直连消息，跳过已经由局域网提交的电脑。
+    ReleaseMessage {
+        /// 会话。
+        conv: ConvId,
+        /// 消息编号。
+        id: MsgId,
+        /// 已经由局域网收到的电脑。
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        direct_devices: Vec<DeviceId>,
     },
     /// 按会话往前翻历史（`before` 为空从最新开始）。
     History {
@@ -935,5 +953,25 @@ mod tests {
     #[test]
     fn unknown_ops_are_rejected() {
         assert!(serde_json::from_str::<ClientFrame>(r#"{"id":1,"req":{"op":"drop_tables"}}"#).is_err());
+    }
+
+    #[test]
+    fn lan_send_and_release_requests_round_trip() {
+        let env = Envelope {
+            conv: ConvId::random(),
+            id: MsgId::random(),
+            generation: 1,
+            sender: Uid::random(),
+            sender_eldest: Fixed([0; 32]),
+            device: DeviceId::random(),
+            recall: None,
+            ct: Bytes(vec![1, 2, 3]),
+        };
+        let send = ClientFrame { id: 8, req: Request::SendLan { env: env.clone() } };
+        let decoded: ClientFrame = serde_json::from_str(&serde_json::to_string(&send).unwrap()).unwrap();
+        assert_eq!(decoded, send);
+        let release = ClientFrame { id: 9, req: Request::ReleaseMessage { conv: env.conv, id: env.id, direct_devices: vec![DeviceId::random()] } };
+        let decoded: ClientFrame = serde_json::from_str(&serde_json::to_string(&release).unwrap()).unwrap();
+        assert_eq!(decoded, release);
     }
 }

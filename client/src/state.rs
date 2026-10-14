@@ -3,7 +3,7 @@
 //! 所有事件按日志序号递增处理，处理过的序号记在 `position`：断线重连后从这里补拉，
 //! 推送里序号不大于它的跳过——不漏、不重（契约 S19）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use friend_im_core::account::{AccountChange, AccountState};
 use friend_im_core::conv::MemberRef;
@@ -22,6 +22,7 @@ use crate::book::Book;
 use crate::conn::Conn;
 use crate::error::{ClientError, Result};
 use crate::keyring::Keyring;
+use crate::lan::DirectInbound;
 use crate::types::{AccountNotice, Config, Credentials, Message, Notice, Update};
 
 /// 新电脑这边进行中的批准。
@@ -66,6 +67,9 @@ pub(crate) struct State {
     pub updates: mpsc::UnboundedSender<Update>,
     /// 当前连接认下的服务器的钟。
     pub clock: ServerClock,
+    /// 已经通过直连或服务器处理过的消息编号，防止两条路径重复显示。
+    pub seen_messages: HashSet<friend_im_core::ids::MsgId>,
+    pub seen_order: VecDeque<friend_im_core::ids::MsgId>,
 }
 
 /// 记一次失败：连接断了是预期内的（重连后补拉），只记普通信息；其余的要关注。
@@ -255,7 +259,17 @@ impl State {
 
     /// 处理一条同步事件（推送或补拉来的）。序号不大于处理到的位置就跳过。
     pub async fn process_event(&mut self, conn: &Conn, event: SyncEvent) {
-        if self.status != DeviceStatus::Active || self.position.is_some_and(|p| event.log <= p) {
+        if self.status != DeviceStatus::Active {
+            return;
+        }
+        if let Event::Message { msg } = &event.event {
+            if self.seen_messages.contains(&msg.env.id) {
+                self.position = Some(self.position.unwrap_or(0).max(event.log));
+                return;
+            }
+            self.remember_message(&msg.env.id);
+        }
+        if self.position.is_some_and(|p| event.log <= p) {
             return;
         }
         let log = event.log;
@@ -280,6 +294,42 @@ impl State {
             Event::AccountLink { uid, epoch, link } => self.on_account_link(conn, &uid, epoch, &link, log).await,
         }
         self.position = Some(log);
+    }
+
+    /// 处理已经由局域网提交真实日志号的消息。直连消息可能比服务器当前推送位置更早，
+    /// 因此按消息编号去重而不是用日志位置拦截。
+    pub async fn handle_direct(&mut self, conn: &Conn, direct: DirectInbound) {
+        if self.status != DeviceStatus::Active || self.seen_messages.contains(&direct.env.id) {
+            return;
+        }
+        let id = direct.env.id.clone();
+        self.remember_message(&id);
+        let msg = StoredMessage { log: direct.log, ts_ms: direct.ts_ms, env: direct.env, recalled: false };
+        match self.open_message(conn, &msg).await {
+            Ok(message) => self.emit(Update::Message(message)),
+            Err(error) => {
+                tracing::warn!(conv = %msg.env.conv, log = direct.log, %error, "局域网消息解不开或验不过");
+                self.emit(Update::MessageRejected {
+                    conv: msg.env.conv.clone(),
+                    id: msg.env.id.clone(),
+                    log: direct.log,
+                    ts_ms: direct.ts_ms,
+                    sender: msg.env.sender.clone(),
+                    reason: error.to_string(),
+                });
+            }
+        }
+        self.position = Some(self.position.unwrap_or(0).max(direct.log));
+        self.emit(Update::Position(self.position.unwrap_or(direct.log)));
+    }
+
+    fn remember_message(&mut self, id: &friend_im_core::ids::MsgId) {
+        if self.seen_messages.insert(id.clone()) {
+            self.seen_order.push_back(id.clone());
+            while self.seen_order.len() > 8192 {
+                if let Some(old) = self.seen_order.pop_front() { self.seen_messages.remove(&old); }
+            }
+        }
     }
 
     async fn on_conv_link(&mut self, conn: &Conn, conv: &ConvId, link: &friend_im_core::conv::ConvLink, log: u64) {

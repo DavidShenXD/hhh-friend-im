@@ -8,7 +8,7 @@ use friend_im_core::conv::{
     ConvChange, ConvKind, ConvLink, ConvState, GroupProfile, MemberRef, RemoveReason, Via, create_body, invite_join_proof,
 };
 use friend_im_core::crypto;
-use friend_im_core::ids::{ConvId, InviteId, MsgId, Uid};
+use friend_im_core::ids::{ConvId, DeviceId, InviteId, MsgId, Uid};
 use friend_im_core::keys::{ConvSeed, InviteSecret, conv_seed_info};
 use friend_im_core::limits;
 use friend_im_core::message::{Content, Envelope, MESSAGE_VERSION, MessageBody, Sender};
@@ -17,6 +17,7 @@ use friend_im_core::wire::{ConvActivity, ConvKeyBundle, ConvSummary, ErrorCode, 
 use crate::conn::Conn;
 use crate::error::{ClientError, Result};
 use crate::links::{InviteLink, http_base};
+use crate::lan::Lan;
 use crate::state::State;
 use crate::types::{ConvInfo, HistoryItem, HistoryPage, Notice};
 
@@ -466,7 +467,7 @@ impl State {
 
     /// 发消息（契约 S14）。`id` 由调用方取：同一次发送重试时用同一个编号，服务器保证不会出现两条。
     /// 会话要先换代时（有人离开、成员换了钥匙、对方重置）先换代再发。返回（日志序号，服务器时间）。
-    pub async fn send(&mut self, conn: &Conn, conv: &ConvId, id: &MsgId, content: Content) -> Result<(u64, i64)> {
+    pub async fn send(&mut self, conn: &Conn, conv: &ConvId, id: &MsgId, content: Content, lan: &Lan) -> Result<(u64, i64)> {
         self.require_active()?;
         self.ensure_account_keys(conn).await?;
         let me = self.my_ref(conn).await?;
@@ -503,10 +504,31 @@ impl State {
                 device: &self.creds.device,
             };
             let env = Envelope::seal(conv, id.clone(), generation, &seed, &sender, &body)?;
-            match conn.request(Request::Send { env }).await {
+            let members: Vec<Uid> = self.book.convs[conv].state.members.keys().cloned().collect();
+            let mut allowed_devices = Vec::<DeviceId>::new();
+            for uid in &members {
+                if self.book.current(uid).is_none() { let _ = self.book.load_account(conn, uid, None).await; }
+                if let Some(account) = self.book.current(uid) {
+                    allowed_devices.extend(account.active_devices().map(|(device, _)| device.clone()));
+                }
+            }
+            let offered = lan.offer(&env, &members, &allowed_devices).await;
+            let direct = !offered.is_empty();
+            let request = if direct { Request::SendLan { env: env.clone() } } else { Request::Send { env: env.clone() } };
+            match conn.request(request).await {
+                Ok(Response::Sent { log, ts_ms }) if direct => {
+                    let delivered = lan.commit(id, log, ts_ms, &offered).await;
+                    if let Err(error) = conn.request(Request::ReleaseMessage { conv: conv.clone(), id: id.clone(), direct_devices: delivered.clone() }).await {
+                        // 消息已经持久化；释放失败时保留服务器同步语义，重连后仍能补拉。
+                        tracing::warn!(%error, conv = %conv, "释放直连消息的服务器推送失败，稍后由同步补齐");
+                    }
+                    return Ok((log, ts_ms));
+                }
                 Ok(Response::Sent { log, ts_ms }) => return Ok((log, ts_ms)),
                 Ok(_) => return Err(ClientError::protocol("回执不对")),
-                Err(error) => match error.code() {
+                Err(error) => {
+                    if direct { lan.cancel(id, &offered).await; }
+                    match error.code() {
                     Some(ErrorCode::RotationRequired) => {
                         self.rotate(conn, conv, Vec::new()).await?;
                         last = Some(error);
@@ -519,8 +541,9 @@ impl State {
                         }
                         last = Some(error);
                     }
-                    _ => return Err(error),
-                },
+                        _ => return Err(error),
+                    }
+                }
             }
         }
         Err(last.unwrap_or(ClientError::Timeout))
