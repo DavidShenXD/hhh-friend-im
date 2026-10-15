@@ -15,7 +15,7 @@ use crate::conn::Conn;
 use crate::error::{ClientError, Result};
 use crate::links::{FriendLink, http_base};
 use crate::state::{Approval, NewDeviceJoin, State};
-use crate::types::Update;
+use crate::types::{JoinStart, Update};
 
 fn appended(response: Response) -> Result<u64> {
     match response {
@@ -183,13 +183,13 @@ impl State {
         }
     }
 
-    /// 新电脑：发起批准请求（契约 S2），返回要显示的 4 个词。
-    pub async fn join_start(&mut self, conn: &Conn) -> Result<JoinCode> {
+    /// 新电脑：发起批准请求（契约 S2），返回要显示的 4 个词与账号里已登录的电脑。
+    pub async fn join_start(&mut self, conn: &Conn) -> Result<JoinStart> {
         self.require_pending()?;
         let code = JoinCode::generate();
         let (handshake, pake) = NewDeviceHandshake::start(&code, &self.uid);
         let proof = device_proof(&self.creds.device, &self.uid, self.epoch, ProofRole::Device);
-        let Response::JoinStarted { request, attempt, .. } = conn.request(Request::JoinStart { pake, proof }).await? else {
+        let Response::JoinStarted { request, attempt, devices, .. } = conn.request(Request::JoinStart { pake, proof }).await? else {
             return Err(ClientError::protocol("回执不对"));
         };
         self.join = Some(NewDeviceJoin {
@@ -198,7 +198,7 @@ impl State {
             attempt,
             handshake: Some(handshake),
         });
-        Ok(code)
+        Ok(JoinStart { code, devices, now_ms: self.now_ms() })
     }
 
     /// 新电脑：不等了。

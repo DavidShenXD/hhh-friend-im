@@ -14,7 +14,6 @@ use friend_im_core::ids::{ConvId, DeviceId, InviteId, MsgId, RequestId, Uid};
 use friend_im_core::keys::RecoveryKey;
 use friend_im_core::message::Content;
 use friend_im_core::wire::{AccountInfo, ConvSummary, DeviceInfo, DeviceStatus, ErrorCode, HelloAuth, JoinRequestInfo, Push};
-use friend_im_core::words::JoinCode;
 use tokio::sync::mpsc;
 
 use crate::book::Book;
@@ -24,7 +23,7 @@ use crate::keyring::Keyring;
 use crate::lan::{DirectInbound, Lan};
 use crate::links::{FriendLink, InviteLink, http_base, ws_url};
 use crate::state::{Flow, State};
-use crate::types::{ConvInfo, Config, Credentials, HistoryPage, Update};
+use crate::types::{ConvInfo, Config, Credentials, HistoryPage, JoinStart, Update};
 
 /// 断线后第一次重连前等多久；之后每次翻倍，最多 [`RECONNECT_MAX`]。
 const RECONNECT_MIN: Duration = Duration::from_secs(1);
@@ -246,8 +245,8 @@ impl Client {
         Ok(())
     }
 
-    /// 新电脑：发起批准请求，返回要显示的 4 个词。
-    pub async fn join_start(&self) -> Result<JoinCode> {
+    /// 新电脑：发起批准请求，返回要显示的 4 个词与账号里已登录的电脑。
+    pub async fn join_start(&self) -> Result<JoinStart> {
         self.call(async |s, c| s.join_start(c).await).await
     }
 

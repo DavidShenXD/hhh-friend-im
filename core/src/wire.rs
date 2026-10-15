@@ -644,6 +644,10 @@ pub enum Response {
         attempt: u32,
         /// 作废时间（毫秒）。
         expires_ms: i64,
+        /// 发起时（不是重试）：这个账号已登录的电脑，新电脑据此说清该去哪台批准、哪台在线（契约 v3 S2）。
+        /// 只有名字与时间；旧服务器不给，旧客户端不认。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        devices: Option<Vec<DeviceInfo>>,
     },
     /// 待处理的批准请求。
     JoinRequests {
@@ -953,6 +957,28 @@ mod tests {
     #[test]
     fn unknown_ops_are_rejected() {
         assert!(serde_json::from_str::<ClientFrame>(r#"{"id":1,"req":{"op":"drop_tables"}}"#).is_err());
+    }
+
+    // 已登录的电脑名单是可选字段：旧服务器的回执照样读（没有名单），新回执带上名单能读回来。
+    #[test]
+    fn join_started_reads_with_and_without_devices() {
+        let request = RequestId::random();
+        let old = format!(r#"{{"op":"join_started","request":"{}","attempt":1,"expires_ms":9}}"#, request.as_str());
+        let Response::JoinStarted { devices, .. } = serde_json::from_str(&old).unwrap() else { panic!() };
+        assert_eq!(devices, None);
+        let res = Response::JoinStarted {
+            request,
+            attempt: 1,
+            expires_ms: 9,
+            devices: Some(vec![DeviceInfo {
+                id: DeviceId::random(),
+                name: "台式机".into(),
+                joined_ms: 1,
+                last_seen_ms: 2,
+                online: false,
+            }]),
+        };
+        assert_eq!(serde_json::from_str::<Response>(&serde_json::to_string(&res).unwrap()).unwrap(), res);
     }
 
     #[test]

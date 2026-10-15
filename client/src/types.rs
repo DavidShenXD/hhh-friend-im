@@ -7,7 +7,8 @@ use friend_im_core::conv::{ConvChange, ConvKind, ConvLink, MemberRef, RemoveReas
 use friend_im_core::ids::{ConvId, DeviceId, InviteId, MsgId, RequestId, Uid};
 use friend_im_core::keys::DeviceSecret;
 use friend_im_core::message::Content;
-use friend_im_core::wire::{DeviceStatus, JoinCloseReason, JoinRequestInfo};
+use friend_im_core::wire::{DeviceInfo, DeviceStatus, JoinCloseReason, JoinRequestInfo};
+use friend_im_core::words::JoinCode;
 use serde::{Deserialize, Serialize};
 
 /// 连接配置。
@@ -44,6 +45,17 @@ impl fmt::Debug for Credentials {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Credentials({}, 登录凭证：{})", self.device.id(), if self.session.is_some() { "有" } else { "无" })
     }
+}
+
+/// 新电脑发起批准请求的结果（契约 S2、v3）。
+#[derive(Debug)]
+pub struct JoinStart {
+    /// 要显示的 4 个词。
+    pub code: JoinCode,
+    /// 这个账号已登录的电脑（名字、在不在线、时间）；旧服务器不给为 `None`。
+    pub devices: Option<Vec<DeviceInfo>>,
+    /// 按服务器的钟，此刻是几点（毫秒）：写“N 天前在线”用。
+    pub now_ms: i64,
 }
 
 /// 一条解开的消息。

@@ -49,7 +49,7 @@ mod types;
 pub use client::{Client, Updates};
 pub use error::{ClientError, Result};
 pub use links::{FriendLink, InviteLink};
-pub use types::{AccountNotice, Config, ConvInfo, ConvNotice, Credentials, HistoryItem, HistoryPage, Message, Notice, Update};
+pub use types::{AccountNotice, Config, ConvInfo, ConvNotice, Credentials, HistoryItem, HistoryPage, JoinStart, Message, Notice, Update};
 
 /// 两边共用的格式（编号、消息内容、群资料等），原样转出，插件不用另外依赖。
 pub use friend_im_core as core;

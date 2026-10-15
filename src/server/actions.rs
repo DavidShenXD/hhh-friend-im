@@ -84,8 +84,8 @@ pub(crate) fn fingerprint(eldest: &[u8]) -> String {
     format!("{} {}", &hex[..4], &hex[4..])
 }
 
-/// 一台电脑的说明：加入日期与最近在线（“加入于 2026-10-10 · 在线”/“… · 3 小时前在线”）。
-fn device_detail(device: &DeviceInfo, now: i64) -> String {
+/// 一台电脑的说明：加入日期与最近在线（“加入于 2026-10-10 · 在线”/“… · 3 小时前在线”）。新电脑登录时列的电脑也用它。
+pub(super) fn device_detail(device: &DeviceInfo, now: i64) -> String {
     let (year, month, day) = civil_date(device.joined_ms);
     let seen = if device.online {
         "在线".to_owned()

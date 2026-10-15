@@ -3,27 +3,124 @@
 //!
 //! - 账号还没开通（第一台电脑）：开通 → 存凭据 → 出示恢复密钥（不能跳过）→ 完成（“Friend-IM 已开通”）。先存再出示：开通后
 //!   这台电脑已在账号里，即使没点完成也不会留下一个没人能进的账号；恢复密钥之后在“我的电脑”里能重新生成。
-//! - 开通过、这台是新电脑：出示 4 个词等旧电脑批准；可改用恢复密钥，或都没有了只能重置。批准、加入、重置完成后存凭据、
+//! - 开通过、这台是新电脑：出示 4 个词等旧电脑批准，说明里写具体去哪台（服务器随请求交回已登录的电脑，契约 v3）；
+//!   一台都不在线时先说清楚、恢复密钥放主按钮。可改用恢复密钥，或都没有了只能重置。批准、加入、重置完成后存凭据、
 //!   完成。拒绝、超时、输错 5 次以失败结束（能重试：重新请求）。
 //!
 //! 令牌只在这一次连服务器时用，不进日志、不存；之后用服务器发的登录凭证（存在凭据里）。
 
 use std::sync::Arc;
 
-use friend_im_client::core::wire::{DeviceStatus, JoinCloseReason};
+use friend_im_client::core::wire::{DeviceInfo, DeviceStatus, JoinCloseReason};
 use friend_im_client::{Client, Config, Credentials, Update, Updates};
+use hhh_im_protocol::budget::STEP_PIECE_MAX_CHARS;
 use hhh_im_protocol::method::{HostAccount, LoginKind, LoginStartParams, LoginStartResult, login_value};
 use hhh_im_protocol::rpc::{ErrorKind, RpcError, RpcId};
 use hhh_im_protocol::types::Account;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
+use super::actions::device_detail;
 use super::flow::{Input, Kind, Ui, compact, link, note, recovery_key, wait_confirm, waiting};
 use super::{Server, errors};
 use crate::credential::Credential;
 
 /// 声明的登录方式编号。
 pub(crate) const HOST_METHOD: &str = "cindy";
+
+/// 出示 4 个词时的老说法：服务器没给已登录电脑的名单（旧服务器，契约 v3 S2g）。
+const PLAIN_CAPTION: &str = "这个账号已经在别的电脑上用过。到一台已登录 Friend-IM 的电脑上，在弹出的“批准新电脑”里输入下面 4 个词：";
+
+/// 一台都不在线时至多列几台（契约 v3 S2f），多出来的写一行“还有 N 台”。
+const OFFLINE_SHOWN_MAX: usize = 5;
+
+/// 新电脑等批准时怎么说（契约 v3 S2）：按服务器随批准请求交回的已登录电脑名单选。
+struct Approval {
+    /// 出示 4 个词时的说明：有电脑在线写去哪台（S2a），都不在线写打开哪台（S2c），没有名单照旧（S2g）。
+    caption: String,
+    /// 一台都不在线：出示 4 个词之前先说清楚、恢复密钥放主按钮的一步（S2b）。
+    offline: Option<Value>,
+}
+
+impl Approval {
+    /// `this_name` 是这台电脑的名字（名单里同名的多写一句）；`now` 按服务器的钟。
+    fn of(devices: Option<&[DeviceInfo]>, this_name: &str, now: i64) -> Self {
+        let Some(devices) = devices else {
+            return Self { caption: PLAIN_CAPTION.into(), offline: None };
+        };
+        let mut online: Vec<&str> = Vec::new();
+        for device in devices.iter().filter(|d| d.online) {
+            if !online.contains(&device.name.as_str()) {
+                online.push(&device.name);
+            }
+        }
+        if !online.is_empty() {
+            return Self { caption: online_caption(&online), offline: None };
+        }
+        Self { caption: wait_caption(devices), offline: Some(offline_step(devices, this_name, now)) }
+    }
+}
+
+/// 有电脑在线（S2a）：“到「A」或「B」上，在弹出的……”。名字多到一段话放不下时只写放得下的几台，加“等 N 台电脑中的一台”。
+fn online_caption(names: &[&str]) -> String {
+    const TAIL: &str = "上，在弹出的“批准新电脑”里输入下面 4 个词：";
+    let quoted: Vec<String> = names.iter().map(|name| format!("「{name}」")).collect();
+    let all = format!("到{}{TAIL}", quoted.join("或"));
+    if all.chars().count() <= STEP_PIECE_MAX_CHARS {
+        return all;
+    }
+    // 电脑名至多 64 个字，至少一台总放得下。
+    (1..quoted.len())
+        .rev()
+        .map(|shown| format!("到{}等 {} 台电脑中的一台{TAIL}", quoted[..shown].join("、"), names.len()))
+        .find(|caption| caption.chars().count() <= STEP_PIECE_MAX_CHARS)
+        .unwrap_or(all)
+}
+
+/// 都不在线、选了等它上线（S2c）：打开那台的 Friend 会弹出批准。
+fn wait_caption(devices: &[DeviceInfo]) -> String {
+    match devices {
+        [] => PLAIN_CAPTION.into(),
+        [only] => format!("打开「{}」上的 Friend，会弹出“批准新电脑”，在里面输入下面 4 个词：", only.name),
+        _ => "打开其中一台的 Friend，会弹出“批准新电脑”，在里面输入下面 4 个词：".into(),
+    }
+}
+
+/// 一台都不在线（S2b、S2b′、S2f）：逐台列名字与“加入于 … · … 在线”，最近在线的在前，至多 5 台；和这台同名的多写一句。
+/// 主按钮改用恢复密钥，左边按钮等它上线，下面一行重置。账号里一台都没有（都退出了）时不给“等它上线”。
+fn offline_step(devices: &[DeviceInfo], this_name: &str, now: i64) -> Value {
+    let lost = link("lost", "旧电脑和恢复密钥都没有了");
+    if devices.is_empty() {
+        return json!({
+            "kind": "confirm", "caption": "这个账号现在没有已登录的电脑", "text": "输入开通时保存的恢复密钥就能加入。",
+            "confirmLabel": "改用恢复密钥", "links": [lost],
+        });
+    }
+    let mut recent: Vec<&DeviceInfo> = devices.iter().collect();
+    recent.sort_by_key(|d| std::cmp::Reverse(d.last_seen_ms));
+    let this_name = this_name.trim().to_lowercase();
+    let mut sections: Vec<Value> = recent
+        .iter()
+        .take(OFFLINE_SHOWN_MAX)
+        .map(|device| {
+            let mut text = device_detail(device, now);
+            if device.name.trim().to_lowercase() == this_name {
+                text.push_str(" · 和这台电脑同名");
+            }
+            json!({ "title": device.name, "text": text })
+        })
+        .collect();
+    let rest = devices.len().saturating_sub(OFFLINE_SHOWN_MAX);
+    if rest > 0 {
+        sections.push(json!({ "title": format!("还有 {rest} 台"), "text": "更早在线的没有列出" }));
+    }
+    let whom = if devices.len() == 1 { "打开它的 Friend" } else { "打开其中一台的 Friend" };
+    json!({
+        "kind": "confirm", "caption": "你的其它电脑现在都不在线", "sections": sections,
+        "text": format!("{whom} 就能批准，也可以输入开通时保存的恢复密钥。"),
+        "confirmLabel": "改用恢复密钥", "cancelLabel": "等它上线批准", "cancelChoice": "wait", "links": [lost],
+    })
+}
 
 /// 这台电脑的名字（“我的电脑”里显示）：系统给的电脑名；拿不到时用“<名字>的电脑”。至多 64 个字。
 pub(crate) fn device_name(account_name: &str) -> String {
@@ -86,7 +183,7 @@ impl Server {
         };
         let finished = match client.status().await {
             DeviceStatus::Unprovisioned => self.provision(ui, &client, &mut rx, &new_credential).await,
-            DeviceStatus::Pending => self.join(ui, &client, &mut updates, &mut rx, &new_credential).await,
+            DeviceStatus::Pending => self.join(ui, &client, &name, &mut updates, &mut rx, &new_credential).await,
             DeviceStatus::Active => {
                 // 服务器认得这台电脑的钥匙且已可用（不会发生：钥匙刚生成），照常存凭据上线。
                 let credential = new_credential(client.credentials().await);
@@ -143,11 +240,12 @@ impl Server {
         Some((credential, Some(("Friend-IM 已开通", "以后在别的电脑上登录同一个 Cindy 账号，用这台电脑批准，就能看到全部聊天记录。"))))
     }
 
-    /// 新电脑：等旧电脑批准，或改用恢复密钥，或重置。
+    /// 新电脑：等旧电脑批准，或改用恢复密钥，或重置。`name` 是这台电脑的名字。
     async fn join(
         &self,
         ui: &Ui<'_>,
         client: &Client,
+        name: &str,
         updates: &mut Updates,
         rx: &mut mpsc::UnboundedReceiver<Input>,
         new_credential: &(dyn Fn(Credentials) -> Credential + Sync),
@@ -161,24 +259,32 @@ impl Server {
         loop {
             match mode {
                 Mode::Approve => {
-                    let code = match client.join_start().await {
-                        Ok(code) => code,
+                    // 每次回到这里都重新发起：重新问一次服务器哪台在线（契约 v3 S2d、S2e）。
+                    let started = match client.join_start().await {
+                        Ok(started) => started,
                         Err(error) => {
                             tracing::info!(%error, "发起批准请求没成");
                             ui.fail(Some("没能请求批准"), &format!("发起批准请求没成：{error}"), Some("再试一次"));
                             return None;
                         }
                     };
+                    let code = started.code;
+                    let approval = Approval::of(started.devices.as_deref(), name, started.now_ms);
+                    tracing::info!(
+                        devices = ?started.devices.as_ref().map(Vec::len),
+                        online = ?started.devices.as_ref().map(|d| d.iter().filter(|d| d.online).count()),
+                        "已请求批准"
+                    );
                     let code_step = |warn: Option<&str>| {
                         compact(json!({
                             "kind": "showText", "layout": "code", "text": code.as_str(), "cancelLabel": "取消",
-                            "caption": "这个账号已经在别的电脑上用过。到一台已登录 Friend-IM 的电脑上，在弹出的“批准新电脑”里输入下面 4 个词：",
+                            "caption": approval.caption,
                             "waiting": "等待批准…（10 分钟内有效）",
                             "note": warn.map(|text| note(text, true)),
                             "links": [link("useKey", "改用恢复密钥"), link("lost", "旧电脑和恢复密钥都没有了")],
                         }))
                     };
-                    ui.step(code_step(None));
+                    ui.step(approval.offline.clone().unwrap_or_else(|| code_step(None)));
                     mode = loop {
                         tokio::select! {
                             input = rx.recv() => match input {
@@ -186,9 +292,14 @@ impl Server {
                                     let _ = client.join_cancel().await;
                                     return None;
                                 }
-                                Some(Input::Choose { choice, .. }) if choice == "useKey" => {
+                                // 都不在线那一步的主按钮（“改用恢复密钥”）与 4 个词下面的链接是同一条路。
+                                Some(Input::Choose { choice, .. }) if choice == "useKey" || choice == "confirm" => {
                                     let _ = client.join_cancel().await;
                                     break Mode::Recovery;
+                                }
+                                // 都不在线那一步的左边按钮：等它上线批准，出示 4 个词（S2c）。
+                                Some(Input::Choose { choice, .. }) if choice == "wait" => {
+                                    ui.step(code_step(None));
                                 }
                                 Some(Input::Choose { choice, .. }) if choice == "lost" => {
                                     let _ = client.join_cancel().await;
@@ -379,9 +490,101 @@ mod tests {
                 "note": note("恢复密钥不对，或已经换过。再核对一下。", true), "links": [link("back", "改用旧电脑批准")],
             })),
         ] {
-            let parsed: LoginStep = serde_json::from_value(step.clone()).unwrap_or_else(|e| panic!("{e}: {step}"));
-            assert_eq!(step_problem(&parsed), None, "{step}");
+            assert_valid(&step);
         }
         assert_eq!(login_methods()[0].kind, LoginKind::Host);
+    }
+
+    fn assert_valid(step: &Value) {
+        let parsed: LoginStep = serde_json::from_value(step.clone()).unwrap_or_else(|e| panic!("{e}: {step}"));
+        assert_eq!(step_problem(&parsed), None, "{step}");
+    }
+
+    const DAY: i64 = 86_400_000;
+    /// 2026-10-15 00:00（UTC+8）。
+    const NOW: i64 = 1_791_993_600_000;
+
+    fn device(name: &str, online: bool, seen_days_ago: i64) -> DeviceInfo {
+        DeviceInfo {
+            id: friend_im_client::core::ids::DeviceId::random(),
+            name: name.into(),
+            joined_ms: NOW - 3 * DAY,
+            last_seen_ms: NOW - seen_days_ago * DAY,
+            online,
+        }
+    }
+
+    fn titles(step: &Value) -> Vec<String> {
+        step["sections"].as_array().unwrap().iter().map(|s| s["title"].as_str().unwrap().to_owned()).collect()
+    }
+
+    // S2g：旧服务器没给名单，照旧出示 4 个词与原来的说明。
+    #[test]
+    fn without_a_list_the_old_wording_stays() {
+        let approval = Approval::of(None, "TEST-B", NOW);
+        assert_eq!(approval.caption, PLAIN_CAPTION);
+        assert!(approval.offline.is_none());
+    }
+
+    // S2a：有电脑在线，说明写具体的电脑；几台在线用“或”连起来，同名只写一次，不在线的不写。
+    #[test]
+    fn online_computers_are_named_in_the_caption() {
+        let one = Approval::of(Some(&[device("MAGICLIZI", true, 0), device("旧笔记本", false, 9)]), "TEST-B", NOW);
+        assert_eq!(one.caption, "到「MAGICLIZI」上，在弹出的“批准新电脑”里输入下面 4 个词：");
+        assert!(one.offline.is_none());
+        let two = Approval::of(Some(&[device("MAGICLIZI", true, 0), device("LIZI", true, 0), device("LIZI", true, 0)]), "TEST-B", NOW);
+        assert_eq!(two.caption, "到「MAGICLIZI」或「LIZI」上，在弹出的“批准新电脑”里输入下面 4 个词：");
+    }
+
+    // 名字多到一段话放不下：只写放得下的几台，加“等 N 台”，仍在协议上限以内。
+    #[test]
+    fn many_long_online_names_stay_within_the_limit() {
+        let long: Vec<DeviceInfo> = (0..6).map(|i| device(&format!("{i}{}", "长".repeat(63)), true, 0)).collect();
+        let caption = Approval::of(Some(&long), "TEST-B", NOW).caption;
+        assert!(caption.chars().count() <= STEP_PIECE_MAX_CHARS, "{caption}");
+        assert!(caption.contains("等 6 台电脑中的一台上"), "{caption}");
+    }
+
+    // S2b、S2b′、S2c：一台都不在线，先说清楚；和这台同名的多写一句；左边按钮等它上线，出示 4 个词时说打开哪台。
+    #[test]
+    fn all_offline_comes_first_with_the_recovery_key_as_the_main_button() {
+        let ghosts = [device("MAGICLIZI", false, 2), device("magiclizi", false, 1)];
+        let approval = Approval::of(Some(&ghosts), "MAGICLIZI", NOW);
+        let step = approval.offline.clone().unwrap();
+        assert_valid(&step);
+        assert_eq!(step["caption"], "你的其它电脑现在都不在线");
+        assert_eq!(step["sections"][0]["title"], "magiclizi", "最近在线的在前");
+        assert_eq!(step["sections"][0]["text"], "加入于 2026-10-12 · 1 天前在线 · 和这台电脑同名");
+        assert_eq!(step["sections"][1]["text"], "加入于 2026-10-12 · 2 天前在线 · 和这台电脑同名");
+        assert_eq!(step["text"], "打开其中一台的 Friend 就能批准，也可以输入开通时保存的恢复密钥。");
+        assert_eq!((step["confirmLabel"].as_str(), step["cancelLabel"].as_str(), step["cancelChoice"].as_str()), (Some("改用恢复密钥"), Some("等它上线批准"), Some("wait")));
+        assert_eq!(step["links"], json!([link("lost", "旧电脑和恢复密钥都没有了")]));
+        assert_eq!(approval.caption, "打开其中一台的 Friend，会弹出“批准新电脑”，在里面输入下面 4 个词：");
+
+        let one = Approval::of(Some(&[device("办公室电脑", false, 0)]), "TEST-B", NOW);
+        let step = one.offline.unwrap();
+        assert_eq!(step["sections"][0]["text"], "加入于 2026-10-12 · 刚刚在线", "不同名不多写");
+        assert_eq!(step["text"], "打开它的 Friend 就能批准，也可以输入开通时保存的恢复密钥。");
+        assert_eq!(one.caption, "打开「办公室电脑」上的 Friend，会弹出“批准新电脑”，在里面输入下面 4 个词：");
+    }
+
+    // S2f：6 台以上只列最近在线的 5 台，加一行“还有 N 台”。
+    #[test]
+    fn a_long_list_shows_the_five_most_recent() {
+        let many: Vec<DeviceInfo> = (0..7).map(|i| device(&format!("电脑{i}"), false, 7 - i)).collect();
+        let step = Approval::of(Some(&many), "TEST-B", NOW).offline.unwrap();
+        assert_valid(&step);
+        assert_eq!(titles(&step), ["电脑6", "电脑5", "电脑4", "电脑3", "电脑2", "还有 2 台"]);
+        assert_eq!(step["sections"][5]["text"], "更早在线的没有列出");
+    }
+
+    // 账号里一台都没有（都退出了）：只能用恢复密钥或重置，不给“等它上线”。
+    #[test]
+    fn no_computers_left_offers_only_the_recovery_key_and_reset() {
+        let step = Approval::of(Some(&[]), "TEST-B", NOW).offline.unwrap();
+        assert_valid(&step);
+        assert_eq!(step["caption"], "这个账号现在没有已登录的电脑");
+        assert_eq!(step["confirmLabel"], "改用恢复密钥");
+        assert!(step.get("cancelChoice").is_none());
     }
 }
