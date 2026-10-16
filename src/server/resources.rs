@@ -24,9 +24,68 @@ use hhh_im_protocol::rpc::{ErrorKind, RpcError};
 use hhh_im_protocol::types::ResourceKind;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+#[cfg(not(target_os = "wasi"))]
+use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
 use super::{Server, errors, translate};
+
+/// WASI 构建（wasm32-wasip2）的暂存文件读写：tokio 在 WASI 上没有后台线程，`tokio::fs` 用不了；这里给出本文件
+/// 用到的那几样、名字与用法相同，内部直接做同步的 `std::fs`（都是宿主临时目录里的小操作）。
+#[cfg(target_os = "wasi")]
+mod fs {
+    use std::io::Write as _;
+    use std::path::Path;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    pub(super) async fn remove_file(path: impl AsRef<Path>) -> std::io::Result<()> {
+        std::fs::remove_file(path)
+    }
+
+    pub(super) async fn create_dir_all(path: impl AsRef<Path>) -> std::io::Result<()> {
+        std::fs::create_dir_all(path)
+    }
+
+    pub(super) struct File(std::fs::File);
+
+    impl File {
+        pub(super) async fn create(path: impl AsRef<Path>) -> std::io::Result<Self> {
+            std::fs::File::create(path).map(Self)
+        }
+    }
+
+    pub(super) struct OpenOptions(std::fs::OpenOptions);
+
+    impl OpenOptions {
+        pub(super) fn new() -> Self {
+            Self(std::fs::OpenOptions::new())
+        }
+
+        pub(super) fn append(&mut self, append: bool) -> &mut Self {
+            self.0.append(append);
+            self
+        }
+
+        pub(super) async fn open(&self, path: impl AsRef<Path>) -> std::io::Result<File> {
+            self.0.open(path).map(File)
+        }
+    }
+
+    impl tokio::io::AsyncWrite for File {
+        fn poll_write(mut self: Pin<&mut Self>, _: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(self.0.write(buf))
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(self.0.flush())
+        }
+
+        fn poll_shutdown(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(self.0.flush())
+        }
+    }
+}
 
 /// 一段至多读多少（协议上限）。
 const SEGMENT_MAX: u64 = 1024 * 1024;
@@ -92,7 +151,7 @@ impl Uploads {
 }
 
 async fn remove(path: &Path) {
-    if let Err(error) = tokio::fs::remove_file(path).await
+    if let Err(error) = fs::remove_file(path).await
         && error.kind() != std::io::ErrorKind::NotFound
     {
         tracing::info!(%error, "删暂存的上传没成");
@@ -130,13 +189,13 @@ impl Server {
             return Err(errors::of(ErrorKind::InvalidRequest, "附件的文件名不对（不能为空、不超过 255 个字）。"));
         }
         let dir = self.uploads.dir();
-        tokio::fs::create_dir_all(&dir).await.map_err(|error| {
+        fs::create_dir_all(&dir).await.map_err(|error| {
             tracing::error!(%error, "建不了暂存目录");
             errors::of(ErrorKind::Disconnected, "插件的临时目录写不进去。")
         })?;
         let id = MsgId::random().to_string();
         let path = dir.join(&id);
-        tokio::fs::File::create(&path).await.map_err(|error| {
+        fs::File::create(&path).await.map_err(|error| {
             tracing::error!(%error, "建不了暂存文件");
             errors::of(ErrorKind::Disconnected, "插件的临时目录写不进去。")
         })?;
@@ -171,7 +230,7 @@ impl Server {
         if entry.written + data.len() as u64 > entry.bytes {
             return Err(errors::of(ErrorKind::InvalidRequest, "上传的内容比说好的大。"));
         }
-        let mut file = tokio::fs::OpenOptions::new().append(true).open(&entry.path).await.map_err(|error| {
+        let mut file = fs::OpenOptions::new().append(true).open(&entry.path).await.map_err(|error| {
             tracing::error!(%error, "打不开暂存文件");
             errors::of(ErrorKind::Disconnected, "插件的临时目录写不进去。")
         })?;

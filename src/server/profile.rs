@@ -116,7 +116,7 @@ impl Profiles {
 
 /// 取过的头像（地址 → 字节），按最近使用留 [`AVATAR_CACHE_MAX`] 张、合计不超过 [`AVATAR_CACHE_MAX_BYTES`]。
 pub(crate) struct Avatars {
-    http: reqwest::Client,
+    http: friend_im_client::web::Client,
     /// 允许取头像的主机（自己头像地址的主机）。
     allowed: Mutex<Option<String>>,
     cache: Mutex<VecDeque<(String, std::sync::Arc<Vec<u8>>)>>,
@@ -125,10 +125,10 @@ pub(crate) struct Avatars {
 impl Default for Avatars {
     fn default() -> Self {
         Self {
-            http: reqwest::Client::builder()
+            http: friend_im_client::web::Client::builder()
                 .connect_timeout(Duration::from_secs(10))
                 .timeout(FETCH_TIMEOUT)
-                .redirect(reqwest::redirect::Policy::none())
+                .redirect(friend_im_client::web::redirect::Policy::none())
                 .build()
                 .unwrap_or_default(),
             allowed: Mutex::new(None),

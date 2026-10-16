@@ -45,6 +45,16 @@ mod ops_account;
 mod ops_conv;
 mod state;
 mod types;
+#[cfg(target_os = "wasi")]
+mod wasi_net;
+
+/// HTTP 客户端（文件上传下载、取头像）：原生构建就是 reqwest；WASI 构建是 `web_wasi.rs` 里接口同名的小实现，
+/// 调用处不分平台。
+#[cfg(not(target_os = "wasi"))]
+pub use reqwest as web;
+#[cfg(target_os = "wasi")]
+#[path = "web_wasi.rs"]
+pub mod web;
 
 pub use client::{Client, Updates};
 pub use error::{ClientError, Result};

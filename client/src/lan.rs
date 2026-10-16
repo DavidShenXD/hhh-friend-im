@@ -105,6 +105,10 @@ impl Lan {
         secret: DeviceSecret,
         inbound: mpsc::UnboundedSender<DirectInbound>,
     ) -> std::io::Result<Arc<Self>> {
+        // WASI 构建（手机上由宿主解释执行）不做局域网直连：没有组播，也不在手机上开监听端口；调用方照原有设计改走服务器中转。
+        if cfg!(target_os = "wasi") {
+            return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "WASI 构建不做局域网直连"));
+        }
         let listener = TcpListener::bind(("0.0.0.0", 0)).await?;
         let port = listener.local_addr()?.port();
         let public = secret.public();

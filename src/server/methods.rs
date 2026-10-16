@@ -331,16 +331,19 @@ impl Server {
     async fn upload_attachment(&self, live: &Live, conv: &ConvId, key: &str, image: bool) -> Result<Part, RpcError> {
         let attachment = self.uploads.attachment(key).await.ok_or_else(|| errors::of(ErrorKind::NotFound, "附件已经过期，要重新上传。"))?;
         let path = attachment.path.clone();
-        let (head, size) = tokio::task::spawn_blocking(move || {
+        let read_head = move || {
             use std::io::Read as _;
             let mut head = vec![0u8; 64 * 1024];
             let n = std::fs::File::open(&path).and_then(|mut f| f.read(&mut head)).unwrap_or(0);
             head.truncate(n);
             let size = imagesize::size(&path).ok();
             (head, size)
-        })
-        .await
-        .unwrap_or_default();
+        };
+        #[cfg(not(target_os = "wasi"))]
+        let (head, size) = tokio::task::spawn_blocking(read_head).await.unwrap_or_default();
+        // WASI 构建没有后台线程：就地读（只读文件头）。
+        #[cfg(target_os = "wasi")]
+        let (head, size) = read_head();
         let image = image || attachment.image;
         let mime = mime_of(&attachment.name, image, &head);
         let file = std::fs::File::open(&attachment.path).map_err(|error| {

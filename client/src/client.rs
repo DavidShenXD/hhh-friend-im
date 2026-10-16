@@ -33,7 +33,7 @@ const RECONNECT_MAX: Duration = Duration::from_secs(30);
 pub(crate) struct Inner {
     pub state: tokio::sync::Mutex<State>,
     conn: Mutex<Option<Arc<Conn>>>,
-    pub http: reqwest::Client,
+    pub http: crate::web::Client,
     pub base: String,
     ws: String,
     uid: Uid,
@@ -129,7 +129,7 @@ impl Client {
         let inner = Arc::new(Inner {
             state: tokio::sync::Mutex::new(state),
             conn: Mutex::new(Some(connected.conn.clone())),
-            http: reqwest::Client::builder()
+            http: crate::web::Client::builder()
                 .connect_timeout(Duration::from_secs(15))
                 .build()
                 .map_err(|e| ClientError::Transfer(e.to_string()))?,

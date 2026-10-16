@@ -71,7 +71,19 @@ async fn connect_inner(url: &str, auth: HelloAuth, device: &DeviceSecret, name: 
     let config = WebSocketConfig::default()
         .max_message_size(Some(limits::CLIENT_FRAME_MAX_BYTES))
         .max_frame_size(Some(limits::CLIENT_FRAME_MAX_BYTES));
-    let (socket, _) = tokio_tungstenite::connect_async_with_config(url, Some(config), true).await.map_err(|error| {
+    #[cfg(not(target_os = "wasi"))]
+    let opened = tokio_tungstenite::connect_async_with_config(url, Some(config), true).await;
+    // WASI 构建：tokio 在 WASI 上不能按主机名连接（查地址要后台线程），先经 `wasi_net` 连上 TCP，再在上面握 TLS 与 websocket。
+    #[cfg(target_os = "wasi")]
+    let opened = async {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+        let request = url.into_client_request()?;
+        let (host, port, _) = crate::wasi_net::host_port(request.uri()).map_err(tokio_tungstenite::tungstenite::Error::Io)?;
+        let stream = crate::wasi_net::connect_tcp(&host, port).await.map_err(tokio_tungstenite::tungstenite::Error::Io)?;
+        tokio_tungstenite::client_async_tls_with_config(request, stream, Some(config), None).await
+    }
+    .await;
+    let (socket, _) = opened.map_err(|error| {
         tracing::info!(%error, "连不上服务器");
         ClientError::Disconnected
     })?;

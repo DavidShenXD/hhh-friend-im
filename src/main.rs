@@ -12,7 +12,12 @@ fn main() {
         println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
         return;
     }
-    let runtime = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
+    #[cfg(not(target_os = "wasi"))]
+    let built = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build();
+    // WASI 构建（手机上由宿主解释执行）没有线程：单线程运行时。
+    #[cfg(target_os = "wasi")]
+    let built = tokio::runtime::Builder::new_current_thread().enable_all().build();
+    let runtime = match built {
         Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("Friend-IM 插件的运行时建不起来：{error}");

@@ -5,7 +5,7 @@ resolver = "3"
 
 [package]
 name = "friend-im"
-version = "0.3.7"
+version = "0.3.8"
 edition = "2024"
 publish = false
 license = "MIT"
@@ -37,8 +37,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "registry"] }
 # 发图片时读宽高（只读文件头，不解码图片）。
 imagesize = "0.14"
-# 取头像（Cindy 头像地址，第三阶段）：和客户端库同一个版本，只开 rustls。
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# 取头像（Cindy 头像地址，第三阶段）用客户端库的 `web`（原生是 reqwest，WASI 构建是同名接口的小实现），不另外依赖。
+
+# WASI 构建（wasm32-wasip2，手机上由宿主解释执行）：tokio 在 WASI 上没有后台线程，它的标准输入输出用不了，
+# 改用 WASI 的非阻塞读写（`src/wasi_stdio.rs`）。
+[target.'cfg(target_os = "wasi")'.dependencies]
+wasip2 = "1"
 
 [profile.release]
 strip = true

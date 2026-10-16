@@ -9,5 +9,7 @@
 
 pub mod credential;
 pub mod server;
+#[cfg(target_os = "wasi")]
+mod wasi_stdio;
 
 pub use server::{Options, run_stdio, serve};
