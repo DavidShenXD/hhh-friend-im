@@ -106,7 +106,8 @@ pub(crate) fn settings() -> Vec<SettingDecl> {
     }]
 }
 
-/// 插件的操作（原型 friend-im-v2）：账号级的进“管理”菜单，群的三项进群的会话菜单（私聊没有菜单）。
+/// 插件的操作（原型 friend-im-v2）：账号级的进“管理”菜单，群的三项进群的会话菜单；“删除会话”（HHH 契约
+/// provider-protocol v18 §4）不写种类，私聊、群都有，排在最后。
 pub(crate) fn actions() -> Vec<ActionDecl> {
     let account = |id: &str, label: &str| ActionDecl { id: id.into(), label: label.into(), scope: ActionScope::Account, conversation_kinds: Vec::new() };
     let group = |id: &str, label: &str| ActionDecl {
@@ -124,6 +125,12 @@ pub(crate) fn actions() -> Vec<ActionDecl> {
         group(actions::MEMBERS, "群成员"),
         group(actions::INVITE, "邀请成员"),
         group(actions::LEAVE, "退出群"),
+        ActionDecl {
+            id: actions::DELETE.into(),
+            label: "删除会话".into(),
+            scope: ActionScope::Conversation,
+            conversation_kinds: Vec::new(),
+        },
     ]
 }
 
@@ -166,13 +173,18 @@ mod tests {
         assert_eq!(result["capabilities"]["resources"]["avatars"], true);
         assert_eq!(result["capabilities"]["events"]["people"], true);
         let actions = actions();
-        assert_eq!(actions.len(), 8);
+        assert_eq!(actions.len(), 9);
         for decl in &actions {
             assert_eq!(hhh_im_protocol::method::action_problem(decl), None, "{decl:?}");
         }
         let ids: std::collections::HashSet<&str> = actions.iter().map(|a| a.id.as_str()).collect();
         assert_eq!(ids.len(), actions.len(), "编号不重复");
-        assert!(actions.iter().filter(|a| a.scope == ActionScope::Conversation).all(|a| a.applies_to(ConversationKind::Group) && !a.applies_to(ConversationKind::Direct)));
+        // 会话菜单：私聊只有“删除会话”，群是 群成员 · 邀请成员 · 退出群 · 删除会话（一份声明，HHH 契约 v18 §4）。
+        let menu = |kind| {
+            actions.iter().filter(|a| a.scope == ActionScope::Conversation && a.applies_to(kind)).map(|a| a.label.as_str()).collect::<Vec<_>>()
+        };
+        assert_eq!(menu(ConversationKind::Direct), ["删除会话"]);
+        assert_eq!(menu(ConversationKind::Group), ["群成员", "邀请成员", "退出群", "删除会话"]);
         // 清单与握手的编号、名字一致。
         let manifest: Value = serde_json::from_str(include_str!("../../hhh-im-provider.json")).unwrap();
         assert_eq!(manifest["id"], PROVIDER_ID);
