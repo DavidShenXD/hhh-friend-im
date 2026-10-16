@@ -2,7 +2,7 @@
 
 端到端加密的 IM，以插件形式接入 HHH 的 Friend（按 [HHH IM 插件协议](https://github.com/MagicLizi/hhh-im-sdk)）：消息、图片、文件、群名和群头像只有成员的电脑能解开，**运行服务器的人（包括我们自己）也看不到**。
 
-> 状态：0.3.6（0.3.0 是第一个能用的版本），只出 Windows x64 的包，从 Friend「设置 → IM」的官方组安装。加密层还没做外部审计（见安全模型）。
+> 状态：0.3.8（0.3.0 是第一个能用的版本），出 Windows x64 与 iPhone / iPad（WASM）的包，从 Friend「设置 → IM」的官方组安装。加密层还没做外部审计（见安全模型）。
 
 ## 用起来是什么样
 
@@ -56,6 +56,13 @@ cargo install --git https://github.com/MagicLizi/hhh-im-sdk --tag v0.3.0 hhh-im-
 powershell -File scripts/pack.ps1     # Windows（官方版本加 -SignKey <hhh-keys>/official/hhh-official-signing.key）
 scripts/pack.sh                       # macOS / Linux
 hhh-im-check dist/stage/hhh-im-provider.json
+```
+
+iPhone / iPad 的包是 WASM 组件（HHH 的 iOS 版在 App 里解释执行，代码同一份）：要 `rustup target add wasm32-wasip2`、装
+[wasi-sdk](https://github.com/WebAssembly/wasi-sdk)（`ring` 有 C 代码），打包工具要 hhh-im-sdk v0.6.0 起的版本：
+
+```sh
+WASI_SDK_PATH=<wasi-sdk 目录> scripts/pack-ios.sh   # 出 dist/friend-im-<版本>-wasm32-wasip2.hhhim，写进同一份版本索引
 ```
 
 在 HHH 里试：设置 → IM → 添加 IM → 文件夹，选 `dist/stage`。发版本按 [发版本规范](https://github.com/MagicLizi/hhh-im-sdk/blob/main/docs/release.md)。

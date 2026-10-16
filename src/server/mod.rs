@@ -81,7 +81,10 @@ pub async fn run_stdio() {
     let (server, writes) = Server::new(Options::default());
     log::install(server.peer.sender());
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "Friend-IM 插件已启动");
+    #[cfg(not(target_os = "wasi"))]
     serve_with(server, tokio::io::stdin(), tokio::io::stdout(), writes).await;
+    #[cfg(target_os = "wasi")]
+    serve_with(server, crate::wasi_stdio::Stdin::new(), crate::wasi_stdio::Stdout, writes).await;
 }
 
 /// 在给定的输入、输出上跑协议服务（测试用进程内的管道），直到输入关掉。

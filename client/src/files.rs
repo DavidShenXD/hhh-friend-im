@@ -14,8 +14,8 @@ use friend_im_core::file::{self, CHUNK_PLAIN, CHUNK_SEALED, Decryptor, Encryptor
 use friend_im_core::ids::{ConvId, FileId};
 use friend_im_core::limits;
 use friend_im_core::wire::{Request, Response};
-use reqwest::StatusCode;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, RANGE};
+use crate::web::StatusCode;
+use crate::web::header::{AUTHORIZATION, CONTENT_TYPE, RANGE};
 
 use crate::client::Client;
 use crate::error::{ClientError, Result};
@@ -158,7 +158,7 @@ async fn put_part(client: &Client, end: &Endpoint, offset: u64, data: &[u8]) -> 
     }
 }
 
-fn upload_offset(response: &reqwest::Response) -> Option<u64> {
+fn upload_offset(response: &crate::web::Response) -> Option<u64> {
     response.headers().get("Upload-Offset")?.to_str().ok()?.parse().ok()
 }
 

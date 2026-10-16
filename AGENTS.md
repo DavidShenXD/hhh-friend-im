@@ -24,6 +24,11 @@
 
 Windows 上程序按窗口程序编（`src/main.rs` 开头的 `windows_subsystem`），HHH 拉起时不弹控制台窗口；标准输入输出照样能用，不要删。
 
+iPhone / iPad 上 HHH 在 App 里跑插件的 WASM 组件（`wasm32-wasip2`，`scripts/pack-ios.sh` 打包）。同一份代码，平台差别只收在这几处，
+改动要两边都编得过：标准输入输出（`src/wasi_stdio.rs`）、HTTP 客户端（`client::web`：原生是 reqwest，WASI 是 `client/src/web_wasi.rs`）、
+按主机名连接（`client/src/wasi_net.rs`）、读写文件（`src/server/resources.rs` 里的小封装）；WASI 上不做局域网直连、tokio 用单线程运行时。
+插件只看得见 `tempDir`，不能起子进程、不能开线程。
+
 ## 协议表达不了时
 
 提给协议（在 [hhh-im-sdk](https://github.com/MagicLizi/hhh-im-sdk/issues) 提 issue，写清楚要什么、为什么所有 IM 都可能需要），
@@ -38,7 +43,7 @@ Windows 上程序按窗口程序编（`src/main.rs` 开头的 `windows_subsystem
 | `version` | `主.次.修订`，每次发版本往上加 |
 | `command` | 程序相对清单的路径；不写扩展名，打 Windows 包时自动指向 `.exe` |
 | `args` | 启动参数（可选） |
-| `os` | 支持的系统：`windows` / `macos` / `linux` |
+| `os` | 支持的系统：`windows` / `macos` / `linux` / `ios`（iPhone / iPad，WASM 包） |
 | `logo` | 标志文件（svg / png / jpg / webp，96 KB 以内） |
 | `publisher`、`homepage` | 发布者、主页 |
 | `imType` | 和别的插件是同一种 IM 时写成同一个值（同一种同一时间只用一个）；不写自成一类 |
