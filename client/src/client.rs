@@ -418,6 +418,8 @@ impl Client {
 
 /// 后台：处理推送；断了就重连、补拉，直到停止。
 async fn supervise(inner: Arc<Inner>, mut pushes: mpsc::Receiver<Push>, mut direct: mpsc::UnboundedReceiver<DirectInbound>) {
+    // 局域网直连没起来（`Lan::disabled`）时发送端已经扔了：通道一关就不再等它，否则 `recv` 每次立刻回 `None`，循环空转占满一个核。
+    let mut direct_open = true;
     loop {
         // 这一轮连接自己的对象：连接关了也要把它推来的东西处理完——服务器移除电脑时先推“已被移出”再关连接。
         let Some(conn) = inner.conn.lock().unwrap_or_else(|p| p.into_inner()).clone() else { return };
@@ -439,8 +441,11 @@ async fn supervise(inner: Arc<Inner>, mut pushes: mpsc::Receiver<Push>, mut dire
                         return;
                     }
                 }
-                message = direct.recv() => {
-                    let Some(message) = message else { continue };
+                message = direct.recv(), if direct_open => {
+                    let Some(message) = message else {
+                        direct_open = false;
+                        continue;
+                    };
                     let mut state = inner.state.lock().await;
                     state.handle_direct(&conn, message).await;
                 }
