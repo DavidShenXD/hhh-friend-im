@@ -199,7 +199,7 @@ impl Server {
             return Ok(which);
         }
         if ![MEMBERS, INVITE, LEAVE, DELETE].contains(&id) {
-            return Err(errors::of(ErrorKind::Unsupported, "Friend-IM 没有这项操作。"));
+            return Err(errors::of(ErrorKind::Unsupported, "Cindy IM 没有这项操作。"));
         }
         let text = params.conversation_id.as_deref().ok_or_else(|| errors::of(ErrorKind::InvalidRequest, "这项操作要在会话里用。"))?;
         let conv = ConvId::parse(text).map_err(|_| errors::of(ErrorKind::NotFound, "没有这个会话。"))?;
@@ -277,7 +277,7 @@ impl Server {
                     let Some(device) = list.iter().find(|d| d.id.to_string() == row && d.id != me) else { continue };
                     let step = json!({
                         "kind": "confirm", "caption": format!("移除「{}」？", device.name), "danger": true, "confirmLabel": "移除",
-                        "text": "那台设备会立刻退出 Friend-IM，之后的新消息它读不到。它本机已有的聊天记录不会被远程删除。",
+                        "text": "那台设备会立刻退出 Cindy IM，之后的新消息它读不到。它本机已有的聊天记录不会被远程删除。",
                     });
                     match confirmed(ui, rx, step).await {
                         None => return,
@@ -341,7 +341,7 @@ impl Server {
             rotate = false;
             ui.step(compact(json!({
                 "kind": "showText", "layout": "line", "text": link_text, "copy": true,
-                "caption": "把这条链接发给想加你的人。对方在 Friend-IM 里粘贴它就能加你为好友，同时核对是你本人。",
+                "caption": "把这条链接发给想加你的人。对方在 Cindy IM 里粘贴它就能加你为好友，同时核对是你本人。",
                 "note": tip.take().map(|text| note(text, false)),
                 "links": [link("renew", "换一条链接")],
             })));
@@ -715,7 +715,7 @@ impl Server {
                     };
                     ui.step(json!({
                         "kind": "showText", "layout": "line", "text": text, "copy": true,
-                        "caption": "对方在 Friend-IM 的“加好友”里粘贴这条链接就能加入，7 天内有效。链接带着群名，只有拿到链接的人看得到，服务器看不到。",
+                        "caption": "对方在 Cindy IM 的“加好友”里粘贴这条链接就能加入，7 天内有效。链接带着群名，只有拿到链接的人看得到，服务器看不到。",
                         "links": [link("back", "改回勾选好友")],
                     }));
                     loop {

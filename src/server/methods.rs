@@ -224,7 +224,7 @@ impl Server {
             return Ok(to_value(Page::<()> { items: Vec::new(), next: None }));
         }
         if !params.newest_first {
-            return Err(errors::of(ErrorKind::Unsupported, "Friend-IM 只能从新往旧翻历史。"));
+            return Err(errors::of(ErrorKind::Unsupported, "Cindy IM 只能从新往旧翻历史。"));
         }
         let before = match params.cursor.as_deref() {
             None => None,
@@ -306,7 +306,7 @@ impl Server {
             Ok(sent) => sent,
             Err(error @ (ClientError::Disconnected | ClientError::Timeout)) => {
                 tracing::info!(%conv, %error, "发送时没连上服务器，不知道发出去没有");
-                return Ok(to_value(SendOutcome::Unknown { reason: "没连上 Friend-IM 服务器，不知道发出去没有。".into() }));
+                return Ok(to_value(SendOutcome::Unknown { reason: "没连上 Cindy IM 服务器，不知道发出去没有。".into() }));
             }
             Err(error) => {
                 tracing::info!(%conv, %error, "发送被拒");

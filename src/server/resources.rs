@@ -2,7 +2,7 @@
 //!
 //! - 读：资源键里有文件编号与文件钥匙（`translate::resource_key`），按宿主要的那一段向服务器取盖住它的加密块、
 //!   在本机逐块核对后解开。一段至多 1 MiB，断了宿主从断处接着读。
-//! - 上传：Friend-IM 的文件要用会话的人才看得见的钥匙加密，上传时就得知道发到哪个会话，所以 `uploads/*` 只把字节
+//! - 上传：Cindy IM 的文件要用会话的人才看得见的钥匙加密，上传时就得知道发到哪个会话，所以 `uploads/*` 只把字节
 //!   暂存进宿主给的临时目录、核对长度与摘要，`messages/send` 带着这个键来时才加密上传（§9.2 允许的做法）。
 //!   暂存至多 32 份、一小时，发出去就删。
 
@@ -182,7 +182,7 @@ impl Server {
     /// `uploads/begin`：开一份暂存。
     pub(crate) async fn upload_begin(&self, params: UploadsBeginParams) -> Result<Value, RpcError> {
         if params.bytes > limits::FILE_PLAIN_MAX {
-            return Err(errors::of(ErrorKind::LimitExceeded, "附件超过 100 MiB，Friend-IM 发不了。"));
+            return Err(errors::of(ErrorKind::LimitExceeded, "附件超过 100 MiB，Cindy IM 发不了。"));
         }
         let name = params.name.trim();
         if name.is_empty() || name.chars().count() > FILE_NAME_MAX_CHARS || name.chars().any(char::is_control) {

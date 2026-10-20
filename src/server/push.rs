@@ -110,7 +110,7 @@ async fn translate_updates(server: Arc<Server>, live: Arc<Live>, mut updates: Up
                 tokio::spawn(async move { drop_groups_left_by_reset(&live).await });
             }
             Update::Disconnected => {
-                server.peer.notify("status", StatusParams { state: ConnState::Connecting, reason: Some("和 Friend-IM 服务器断开了，正在重连".into()) });
+                server.peer.notify("status", StatusParams { state: ConnState::Connecting, reason: Some("和 Cindy IM 服务器断开了，正在重连".into()) });
             }
             Update::Position(log) => outbox.position(log),
             Update::Message(message) => on_message(&live, &outbox, message).await,
@@ -138,11 +138,11 @@ async fn translate_updates(server: Arc<Server>, live: Arc<Live>, mut updates: Up
             }
             Update::CredentialsChanged => save_credentials(&server, &live).await,
             Update::DeviceRemoved => {
-                expire(&server, ReauthReason::Revoked, "这台电脑已被移出你的 Friend-IM 账号，要重新登录。").await;
+                expire(&server, ReauthReason::Revoked, "这台电脑已被移出你的 Cindy IM 账号，要重新登录。").await;
                 return;
             }
             Update::LoggedOut => {
-                expire(&server, ReauthReason::Expired, "Friend-IM 的登录已失效，要重新登录。").await;
+                expire(&server, ReauthReason::Expired, "Cindy IM 的登录已失效，要重新登录。").await;
                 return;
             }
             Update::Account { uid, notice, .. } if uid == live.me => match notice {

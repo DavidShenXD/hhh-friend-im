@@ -1,4 +1,4 @@
-//! Friend-IM 插件程序（HHH-IM-Protocol v1）。
+//! Cindy IM 插件程序（HHH-IM-Protocol v1）。
 //!
 //! 插件是一个子进程：HHH 从标准输入一行一条发 JSON-RPC 请求，插件从标准输出一行一条回；日志走 `log/write`
 //! 通知，标准输出不写别的东西。请求循环与各个方法在库里（`friend_im::server`）。
@@ -20,7 +20,7 @@ fn main() {
     let runtime = match built {
         Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("Friend-IM 插件的运行时建不起来：{error}");
+            eprintln!("Cindy IM 插件的运行时建不起来：{error}");
             std::process::exit(1);
         }
     };

@@ -1,4 +1,4 @@
-//! Friend-IM 插件：把客户端库（`friend-im-client`）翻成 HHH-IM-Protocol v1，规范见 hhh-im-sdk 的 `docs/protocol-v1.md`。
+//! Cindy IM 插件：把客户端库（`friend-im-client`）翻成 HHH-IM-Protocol v1，规范见 hhh-im-sdk 的 `docs/protocol-v1.md`。
 //!
 //! - 加密、签名链核对、钥匙都在客户端库里；插件只做翻译：服务器上的会话、消息、系统提示、文件 → 协议的会话、消息、资源，
 //!   HHH 要发的内容 → 客户端库的消息正文。

@@ -1,4 +1,4 @@
-//! Friend-IM 客户端库：连服务器、核对签名链、钥匙缓存、同步与断线重连。不认识 HHH 协议，插件把它翻成 HHH 的插件协议。
+//! Cindy IM 客户端库：连服务器、核对签名链、钥匙缓存、同步与断线重连。不认识 HHH 协议，插件把它翻成 HHH 的插件协议。
 //!
 //! - 只认自己验过的东西：服务器给的账号签名链、会话签名链、钥匙封装、消息，每一样都按 `friend-im-core` 的规则核对，
 //!   对不上就报 [`ClientError::Verify`] 或推 [`Update::ConvRejected`] / [`Update::MessageRejected`]，不当成正常内容。

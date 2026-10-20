@@ -30,26 +30,26 @@ pub(crate) fn invalid_params(error: impl std::fmt::Display) -> RpcError {
 pub(crate) fn method_not_found(method: &str) -> RpcError {
     RpcError {
         code: code::METHOD_NOT_FOUND,
-        ..of(ErrorKind::Unsupported, format!("Friend-IM 插件不支持 {method}。"))
+        ..of(ErrorKind::Unsupported, format!("Cindy IM 插件不支持 {method}。"))
     }
 }
 
 /// 还没上线（没有 `session/open`，或这台电脑已经下线）。
 pub(crate) fn offline() -> RpcError {
-    of(ErrorKind::Disconnected, "Friend-IM 还没有连上。")
+    of(ErrorKind::Disconnected, "Cindy IM 还没有连上。")
 }
 
 /// 客户端库的错误。服务器的拒绝按错误码分类，服务器给的说明原样带上（服务器只写人话，不带内容）。
 pub(crate) fn client(error: &ClientError) -> RpcError {
     match error {
-        ClientError::Disconnected | ClientError::Timeout => of(ErrorKind::Disconnected, "没连上 Friend-IM 服务器，稍后再试。"),
+        ClientError::Disconnected | ClientError::Timeout => of(ErrorKind::Disconnected, "没连上 Cindy IM 服务器，稍后再试。"),
         ClientError::Transfer(message) => of(ErrorKind::Disconnected, format!("文件传输没成：{message}")),
         ClientError::Server(wire) => {
-            let message = format!("Friend-IM 服务器拒绝了：{}", wire.message);
+            let message = format!("Cindy IM 服务器拒绝了：{}", wire.message);
             match wire.code {
-                ErrorCode::Unauthorized => auth(ReauthReason::Expired, "Friend-IM 的登录已失效，要重新登录。"),
-                ErrorCode::DeviceRemoved => auth(ReauthReason::Revoked, "这台电脑已被移出你的 Friend-IM 账号，要重新登录。"),
-                ErrorCode::NotApproved => auth(ReauthReason::CredentialInvalid, "这台电脑还没被批准加入 Friend-IM 账号。"),
+                ErrorCode::Unauthorized => auth(ReauthReason::Expired, "Cindy IM 的登录已失效，要重新登录。"),
+                ErrorCode::DeviceRemoved => auth(ReauthReason::Revoked, "这台电脑已被移出你的 Cindy IM 账号，要重新登录。"),
+                ErrorCode::NotApproved => auth(ReauthReason::CredentialInvalid, "这台电脑还没被批准加入 Cindy IM 账号。"),
                 ErrorCode::Forbidden => of(ErrorKind::PermissionDenied, message),
                 ErrorCode::NotFound => of(ErrorKind::NotFound, message),
                 ErrorCode::LimitExceeded => of(ErrorKind::LimitExceeded, message),
@@ -61,7 +61,7 @@ pub(crate) fn client(error: &ClientError) -> RpcError {
                     error
                 }
                 ErrorCode::Unsupported => of(ErrorKind::Unsupported, message),
-                ErrorCode::Internal => of(ErrorKind::Disconnected, "Friend-IM 服务器出错了，稍后再试。"),
+                ErrorCode::Internal => of(ErrorKind::Disconnected, "Cindy IM 服务器出错了，稍后再试。"),
                 ErrorCode::BadRequest | ErrorCode::Invalid | ErrorCode::Conflict | ErrorCode::RotationRequired | ErrorCode::Expired => {
                     of(ErrorKind::InvalidRequest, message)
                 }

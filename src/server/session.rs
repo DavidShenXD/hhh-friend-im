@@ -236,11 +236,11 @@ impl Server {
         let server = server_setting(&params)?;
         *self.server_url.lock().expect("服务器地址锁中毒") = Some(server.clone());
         let Some(text) = params.credential.as_deref() else {
-            return needs_login(NeedsLoginReason::NoCredential, "用 Cindy 账号登录 Friend-IM。");
+            return needs_login(NeedsLoginReason::NoCredential, "用 Cindy 账号登录 Cindy IM。");
         };
         let Some(saved) = Credential::decode(text) else {
             tracing::warn!("凭据读不懂（格式或版本不对），要重新登录");
-            return needs_login(NeedsLoginReason::CredentialInvalid, "Friend-IM 的登录信息读不懂了，要重新登录。");
+            return needs_login(NeedsLoginReason::CredentialInvalid, "Cindy IM 的登录信息读不懂了，要重新登录。");
         };
         if saved.server != server {
             tracing::info!(saved = %saved.server, setting = %server, "服务器地址改了，要重新登录");
@@ -252,9 +252,9 @@ impl Server {
             Ok(connected) => connected,
             Err(error) => {
                 return match error.code() {
-                    Some(ErrorCode::Unauthorized) => needs_login(NeedsLoginReason::Expired, "Friend-IM 的登录已失效，要重新登录。"),
-                    Some(ErrorCode::DeviceRemoved) => needs_login(NeedsLoginReason::Revoked, "这台电脑已被移出你的 Friend-IM 账号，要重新登录。"),
-                    Some(ErrorCode::NotApproved) => needs_login(NeedsLoginReason::CredentialInvalid, "这台电脑还没被批准加入 Friend-IM 账号。"),
+                    Some(ErrorCode::Unauthorized) => needs_login(NeedsLoginReason::Expired, "Cindy IM 的登录已失效，要重新登录。"),
+                    Some(ErrorCode::DeviceRemoved) => needs_login(NeedsLoginReason::Revoked, "这台电脑已被移出你的 Cindy IM 账号，要重新登录。"),
+                    Some(ErrorCode::NotApproved) => needs_login(NeedsLoginReason::CredentialInvalid, "这台电脑还没被批准加入 Cindy IM 账号。"),
                     _ => {
                         tracing::info!(%error, "连不上服务器");
                         Err(errors::client(&error))
@@ -302,7 +302,7 @@ impl Server {
         if let Some(old) = self.state.write().await.replace(live.clone()) {
             old.close();
         }
-        tracing::info!("Friend-IM 已上线");
+        tracing::info!("Cindy IM 已上线");
         let (server, after_live) = (self.clone(), live.clone());
         let after = tokio::spawn(async move {
             server.refresh_requests(&after_live).await;
@@ -314,7 +314,7 @@ impl Server {
         account
     }
 
-    /// `session/logout`：这台电脑退出 Friend-IM（从“我的电脑”里移除，契约 S22），再下线。
+    /// `session/logout`：这台电脑退出 Cindy IM（从“我的电脑”里移除，契约 S22），再下线。
     pub(crate) async fn session_logout(&self) -> Result<Value, RpcError> {
         if let Ok(live) = self.live().await
             && let Err(error) = live.client.logout().await
@@ -332,7 +332,7 @@ impl Server {
     pub(crate) async fn save_credential(&self, credential: &Credential) -> Result<(), String> {
         let params = hhh_im_protocol::method::CredentialSaveParams { credential: credential.encode(), renew_at_ms: None };
         self.peer.request("credential/save", &params).await.map(|_| ()).map_err(|error| {
-            tracing::error!(?error, "宿主没存下 Friend-IM 的凭据");
+            tracing::error!(?error, "宿主没存下 Cindy IM 的凭据");
             "Friend 没存下登录信息，请重试。".to_owned()
         })
     }

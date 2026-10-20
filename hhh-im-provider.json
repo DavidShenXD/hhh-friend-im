@@ -1,12 +1,13 @@
 {
   "manifestVersion": 1,
   "id": "friend-im",
-  "name": "Friend-IM",
+  "name": "Cindy IM",
   "imType": "friend-im",
   "version": "0.3.11",
   "command": "friend-im",
   "os": ["windows", "macos", "linux", "ios"],
   "logo": "logo.svg",
+  "logoStyle": "mark",
   "publisher": "MagicLizi",
   "homepage": "https://github.com/MagicLizi/hhh-friend-im",
   "source": { "type": "github", "repo": "MagicLizi/hhh-friend-im" }
