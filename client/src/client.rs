@@ -500,8 +500,6 @@ async fn reconnect(inner: &Arc<Inner>) -> Result<mpsc::Receiver<Push>> {
     state.epoch = welcome.epoch;
     state.clock = connected.clock;
     inner.set_conn(Some(connected.conn.clone()));
-    state.emit(Update::Connected { status: welcome.status });
-    tracing::info!("已重连");
     if welcome.status == DeviceStatus::Active && !was_active {
         // 断线期间被批准了：取账号钥匙、从登录前的位置开始同步。
         state.join = None;
@@ -515,5 +513,15 @@ async fn reconnect(inner: &Arc<Inner>) -> Result<mpsc::Receiver<Push>> {
     {
         tracing::info!(%error, "补换账号钥匙没成（可能别的电脑已经换了）");
     }
+    // 批准请求不在消息同步日志里。补读失败沿用连接退避，不能带旧列表宣告恢复。
+    if welcome.status == DeviceStatus::Active
+        && let Err(error) = state.join_requests(&connected.conn).await
+    {
+        connected.conn.close();
+        inner.set_conn(None);
+        return Err(error);
+    }
+    state.emit(Update::Connected { status: welcome.status });
+    tracing::info!("已重连");
     Ok(connected.pushes)
 }

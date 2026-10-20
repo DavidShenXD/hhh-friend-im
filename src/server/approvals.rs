@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use friend_im_client::core::ids::RequestId;
 use friend_im_client::core::limits::JOIN_MAX_ATTEMPTS;
-use friend_im_client::core::wire::{JoinCloseReason, JoinRequestInfo};
+use friend_im_client::core::wire::{ErrorCode, JoinCloseReason, JoinRequestInfo};
 use friend_im_client::core::words::{JOIN_CODE_WORDS, JoinCode};
 use hhh_im_protocol::method::{Notice, NoticeAction, SessionNoticeParams};
 use serde_json::json;
@@ -100,13 +100,17 @@ impl Server {
 
     /// 上线后补上已经在等的批准请求（离线时来的）。取不到只记日志。
     pub(crate) async fn refresh_requests(&self, live: &Live) {
-        match live.client.join_requests().await {
-            Ok(requests) => {
-                *live.requests.lock().expect("批准请求锁中毒") = requests.into_iter().map(|r| (r.request.to_string(), r)).collect();
-                self.send_notices(live);
-            }
-            Err(error) => tracing::info!(%error, "待批准的新电脑取不到，等推送"),
+        // 快照由客户端与推送按同一顺序交回，不能在异步返回处覆盖更新过的列表。
+        if let Err(error) = live.client.join_requests().await {
+            tracing::info!(%error, "待批准的新电脑取不到，等重连或推送");
         }
+    }
+
+    pub(crate) fn requests_refreshed(&self, live: &Live, requests: Vec<JoinRequestInfo>) {
+        let pending = requests.iter().map(|r| r.request.clone()).collect();
+        *live.requests.lock().expect("批准请求锁中毒") = requests.into_iter().map(|r| (r.request.to_string(), r)).collect();
+        self.send_notices(live);
+        self.flows.send_to_action(Input::Join(JoinEvent::Pending(pending)));
     }
 
     /// 有新电脑请求加入。
@@ -183,6 +187,17 @@ impl Server {
                     ui.step(json!({ "kind": "message", "text": "正在核对…", "tone": "info" }));
                     if let Err(error) = live.client.join_respond(&info.request, words).await {
                         tracing::info!(%error, "批准新电脑没交上去");
+                        match error.code() {
+                            Some(ErrorCode::Conflict) => {
+                                ui.step(input_step(Some("这次尝试正在处理，结果会自动更新。".into())));
+                                continue;
+                            }
+                            Some(ErrorCode::NotFound | ErrorCode::Expired) => {
+                                ui.done(None, None);
+                                return;
+                            }
+                            _ => {}
+                        }
                         ui.fail(Some("请求已结束"), &format!("这次请求已经处理过或作废了（{error}）。"), None);
                         return;
                     }
@@ -191,11 +206,17 @@ impl Server {
                     let left = (JOIN_MAX_ATTEMPTS + 1).saturating_sub(attempt);
                     ui.step(input_step(Some(format!("和新电脑上的不一致，再看一下（还能试 {left} 次）。"))));
                 }
+                Input::Join(JoinEvent::Approved { request }) if request == info.request => {
+                    ui.done(Some(&format!("已批准「{name}」")), Some("那台电脑正在补齐聊天记录。你的其它电脑也会收到提醒。"));
+                    return;
+                }
+                Input::Join(JoinEvent::Pending(requests)) if !requests.contains(&info.request) => {
+                    ui.done(None, None);
+                    return;
+                }
                 Input::Join(JoinEvent::Closed { request, reason }) if request == info.request => {
                     match reason {
-                        JoinCloseReason::Approved => {
-                            ui.done(Some(&format!("已批准「{name}」")), Some("那台电脑正在补齐聊天记录。你的其它电脑也会收到提醒。"));
-                        }
+                        JoinCloseReason::Approved => ui.done(None, None),
                         JoinCloseReason::TooManyAttempts => ui.fail(
                             Some("请求已作废"),
                             "连续 5 次和新电脑上的不一致，这次请求已作废。需要的话，在新电脑上重新请求。",

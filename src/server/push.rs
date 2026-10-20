@@ -155,6 +155,8 @@ async fn translate_updates(server: Arc<Server>, live: Arc<Live>, mut updates: Up
             // 聊过的人重置账号：会话里的系统提示另外推来（MemberReset），这里不用管。
             Update::Account { .. } | Update::Activated | Update::JoinWrongCode { .. } => {}
             Update::JoinRequested(info) => server.join_requested(&live, info),
+            Update::JoinRequests(requests) => server.requests_refreshed(&live, requests),
+            Update::JoinApproved { request } => server.flows.send_to_action(Input::Join(JoinEvent::Approved { request })),
             Update::JoinRetry { request, attempt } => server.flows.send_to_action(Input::Join(JoinEvent::Retry { request, attempt })),
             Update::JoinClosed { request, reason } => server.join_closed(&live, request, reason),
         }

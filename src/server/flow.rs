@@ -37,6 +37,10 @@ pub(crate) enum Input {
 /// 新电脑批准的事件。
 #[derive(Debug, Clone)]
 pub(crate) enum JoinEvent {
+    /// 本机完成批准。
+    Approved { request: RequestId },
+    /// 补读后的完整请求列表，用于关掉断网期间已结束的操作框。
+    Pending(Vec<RequestId>),
     /// 旧电脑输错了：还能再输（第几次尝试）。
     Retry { request: RequestId, attempt: u32 },
     /// 请求结束。
