@@ -152,7 +152,22 @@ impl Server {
             Ok(which) => which,
             Err(error) => return Some(Err(error)),
         };
-        let title = matches!(which, Which::Approve(_)).then(|| "批准新设备".to_owned());
+        let title = match &which {
+            Which::Approve(request) => live
+                .requests
+                .lock()
+                .expect("批准请求锁中毒")
+                .get(request)
+                .map(|info| {
+                    if matches!(info.kind, friend_im_client::core::wire::DeviceKind::Mobile) {
+                        "批准新设备"
+                    } else {
+                        "批准新电脑"
+                    }
+                    .to_owned()
+                }),
+            _ => None,
+        };
         let (flow_id, rx) = self.flows.begin(Kind::Action);
         let result = ActionsStartResult { flow_id: flow_id.clone(), title };
         self.peer.respond(id.clone(), Ok(serde_json::to_value(result).expect("结果总能写成 JSON")));
