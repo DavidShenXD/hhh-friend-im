@@ -297,6 +297,8 @@ impl State {
             return Err(ClientError::protocol("回执不对"));
         };
         self.requests = requests.iter().map(|r| (r.request.clone(), r.clone())).collect();
+        self.approvals.retain(|id, approval| self.requests.get(id).is_some_and(|r| r.attempt == approval.info.attempt));
+        self.emit(Update::JoinRequests(requests.clone()));
         Ok(requests)
     }
 
@@ -365,6 +367,7 @@ impl State {
             .await?,
         )?;
         tracing::info!("新电脑已批准");
+        self.emit(Update::JoinApproved { request: request.clone() });
         self.book.load_account(conn, &self.uid, Some(state.epoch)).await?;
         Ok(())
     }

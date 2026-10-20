@@ -265,6 +265,13 @@ pub enum Update {
     },
     /// 旧电脑：有新电脑请求加入。
     JoinRequested(JoinRequestInfo),
+    /// 补读后的全部有效请求，与增量事件按同一状态锁的顺序交付。
+    JoinRequests(Vec<JoinRequestInfo>),
+    /// 服务器已接受本机批准，只有实际完成批准的设备收到。
+    JoinApproved {
+        /// 批准请求。
+        request: RequestId,
+    },
     /// 旧电脑：刚输入的 4 个词和新电脑上的不一致，可以再输（契约 S21）。
     JoinRetry {
         /// 批准请求。

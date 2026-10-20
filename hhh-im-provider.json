@@ -3,7 +3,7 @@
   "id": "friend-im",
   "name": "Friend-IM",
   "imType": "friend-im",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "command": "friend-im",
   "os": ["windows", "macos", "linux", "ios"],
   "logo": "logo.svg",
