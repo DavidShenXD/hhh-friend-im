@@ -21,6 +21,7 @@ use crate::bytes::{Bytes, Fixed};
 use crate::crypto::{self, ctx};
 use crate::error::{CoreError, Result};
 use crate::ids::{DeviceId, Uid};
+use crate::wire::DeviceKind;
 use crate::keys::{AccountKeyPub, DevicePublic, DeviceSecret};
 
 /// 签名链格式版本。
@@ -46,6 +47,9 @@ pub struct DeviceEntry {
     pub keys: DevicePublic,
     /// 给人看的电脑名。
     pub name: String,
+    /// 设备类别；旧签名链没有时按电脑处理。
+    #[serde(default, skip_serializing_if = "DeviceKind::is_unknown")]
+    pub kind: DeviceKind,
 }
 
 /// 新钥匙的“证明”扮演的角色：电脑，或恢复密钥。
@@ -199,6 +203,8 @@ pub struct DeviceRecord {
     pub keys: DevicePublic,
     /// 电脑名。
     pub name: String,
+    /// 设备类别。
+    pub kind: DeviceKind,
     /// 加入的位置。
     pub added: Position,
     /// 被移除的位置（还在则为空）。
@@ -267,6 +273,7 @@ impl AccountState {
             DeviceRecord {
                 keys: device.keys,
                 name: device.name.clone(),
+                kind: device.kind,
                 added: position,
                 removed: None,
             },
@@ -332,6 +339,7 @@ impl AccountState {
                     DeviceRecord {
                         keys: device.keys,
                         name: device.name.clone(),
+                        kind: device.kind,
                         added: position,
                         removed: None,
                     },
@@ -468,6 +476,7 @@ pub(crate) mod tests {
         DeviceEntry {
             keys: secret.public(),
             name: name.into(),
+            kind: DeviceKind::Computer,
         }
     }
 

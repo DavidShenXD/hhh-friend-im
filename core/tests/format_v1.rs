@@ -16,7 +16,7 @@ use friend_im_core::file;
 use friend_im_core::ids::{ConvId, MsgId, Uid};
 use friend_im_core::keys::{AccountSeed, ConvSeed, DeviceSecret, RecoveryKey, account_seed_info};
 use friend_im_core::message::{Content, Envelope, MESSAGE_VERSION, MessageBody, Part, Sender};
-use friend_im_core::wire::{self, ClientFrame, HelloAuth, Request};
+use friend_im_core::wire::{self, ClientFrame, DeviceKind, HelloAuth, Request};
 use serde::{Deserialize, Serialize};
 
 const PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/format-v1.json");
@@ -60,7 +60,7 @@ const FILE_KEY: [u8; 32] = [0x66; 32];
 const FILE_PLAIN: &str = "文件内容：第 1 版格式夹具。";
 
 fn eldest() -> AccountLink {
-    let entry = DeviceEntry { keys: device().public(), name: "夹具电脑".into() };
+    let entry = DeviceEntry { keys: device().public(), name: "夹具电脑".into(), kind: DeviceKind::Computer };
     AccountLink::sign(&eldest_body(&uid(), 0, entry, &recovery().device_secret(), account_seed().public(1), 1_700_000_000_000), &device())
 }
 
@@ -74,6 +74,7 @@ fn hello() -> String {
             auth: HelloAuth::Session { token: Bytes(vec![0x88; 32]) },
             device: device.public(),
             name: "夹具电脑".into(),
+            kind: DeviceKind::Computer,
             sig: wire::sign_hello(&device, &nonce),
         },
     };

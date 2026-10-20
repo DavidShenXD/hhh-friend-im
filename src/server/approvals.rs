@@ -76,7 +76,7 @@ pub(crate) fn notices_of(live: &Live) -> Vec<Notice> {
         .values()
         .map(|info| Notice {
             id: format!("join-{}", info.request),
-            text: format!("新电脑「{}」等你批准", info.name),
+            text: format!("新{}「{}」等你批准", info.kind.label(), info.name),
             relogin: false,
             action: Some(NoticeAction { id: format!("{APPROVE_PREFIX}{}", info.request), label: "查看".into() }),
             prompt: true,
@@ -149,15 +149,16 @@ impl Server {
             return;
         };
         let name = info.name.clone();
+        let device_word = info.kind.label();
         let input_step = |warn: Option<String>| {
             compact(json!({
                 "kind": "input",
-                "caption": format!("新电脑「{name}」想登录你的 Friend-IM 账号（{}）。如果是你本人在操作，输入那台电脑上显示的 4 个词。", when(info.created_ms)),
-                "fields": [{ "id": "words", "label": "新电脑上的 4 个词", "secret": false, "placeholder": "用空格隔开" }],
+                "caption": format!("新{device_word}「{name}」想登录你的 Friend-IM 账号（{}）。如果是你本人在操作，输入那台设备上显示的 4 个词。", when(info.created_ms)),
+                "fields": [{ "id": "words", "label": "新设备上的 4 个词", "secret": false, "placeholder": "用空格隔开" }],
                 "submitLabel": "批准", "cancelLabel": "拒绝", "cancelChoice": "reject",
                 "note": match &warn {
                     Some(text) => note(text, true),
-                    None => note("不是你本人在操作就点“拒绝”：批准后，那台电脑能读你的全部消息。", false),
+                    None => note(&format!("不是你本人在操作就点“拒绝”：批准后，那台设备能读你的全部消息。"), false),
                 },
             }))
         };

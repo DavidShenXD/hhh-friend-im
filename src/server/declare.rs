@@ -117,7 +117,7 @@ pub(crate) fn actions() -> Vec<ActionDecl> {
         conversation_kinds: vec![ConversationKind::Group],
     };
     vec![
-        account(actions::DEVICES, "我的电脑"),
+        account(actions::DEVICES, "我的设备"),
         account(actions::LINK, "我的好友链接"),
         account(actions::ADD, "加好友"),
         account(actions::GROUP, "新建群"),

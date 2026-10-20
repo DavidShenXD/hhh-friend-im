@@ -86,6 +86,44 @@ pub enum HelloAuth {
     },
 }
 
+/// 登录设备的类别。只用于设备列表和批准提示，不参与密钥计算。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceKind {
+    #[default]
+    Computer,
+    Mobile,
+    Unknown,
+}
+
+impl DeviceKind {
+    pub fn is_unknown(&self) -> bool { matches!(self, Self::Computer | Self::Unknown) }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Computer => "电脑",
+            Self::Mobile => "手机或平板",
+            Self::Unknown => "设备",
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Computer => "computer",
+            Self::Mobile => "mobile",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "computer" => Self::Computer,
+            "mobile" => Self::Mobile,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// `hello` 里对随机数的签名内容。
 fn hello_message(nonce: &Fixed<32>, device: &DevicePublic) -> Vec<u8> {
     crypto::frame(&[&nonce.0, &device.to_bytes()])
@@ -172,6 +210,9 @@ pub enum Request {
         device: DevicePublic,
         /// 电脑名。
         name: String,
+        /// 设备类别；旧客户端没有这个字段时按电脑处理。
+        #[serde(default, skip_serializing_if = "DeviceKind::is_unknown")]
+        kind: DeviceKind,
         /// 对随机数的签名。
         sig: Fixed<64>,
     },
@@ -476,6 +517,9 @@ pub struct DeviceInfo {
     pub last_seen_ms: i64,
     /// 现在是否在线。
     pub online: bool,
+    /// 设备类别；旧服务器或旧客户端没有时按电脑处理。
+    #[serde(default, skip_serializing_if = "DeviceKind::is_unknown")]
+    pub kind: DeviceKind,
 }
 
 /// 一个待处理的批准请求。
@@ -487,6 +531,9 @@ pub struct JoinRequestInfo {
     pub device: DevicePublic,
     /// 新电脑名。
     pub name: String,
+    /// 新设备类别；旧服务器没有时按电脑处理。
+    #[serde(default, skip_serializing_if = "DeviceKind::is_unknown")]
+    pub kind: DeviceKind,
     /// 发起时间（毫秒）。
     pub created_ms: i64,
     /// 作废时间（毫秒）。
@@ -937,6 +984,7 @@ mod tests {
                 auth: HelloAuth::Session { token: Bytes(vec![1, 2]) },
                 device: DeviceSecret::generate().public(),
                 name: "台式机".into(),
+                kind: DeviceKind::Computer,
                 sig: Fixed([0; 64]),
             },
         };
@@ -976,6 +1024,7 @@ mod tests {
                 joined_ms: 1,
                 last_seen_ms: 2,
                 online: false,
+                kind: DeviceKind::Computer,
             }]),
         };
         assert_eq!(serde_json::from_str::<Response>(&serde_json::to_string(&res).unwrap()).unwrap(), res);

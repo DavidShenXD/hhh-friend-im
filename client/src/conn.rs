@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use friend_im_core::keys::DeviceSecret;
 use friend_im_core::limits;
-use friend_im_core::wire::{self, ClientFrame, HelloAuth, Push, Request, Response, ServerFrame, Welcome, WireError};
+use friend_im_core::wire::{self, ClientFrame, DeviceKind, HelloAuth, Push, Request, Response, ServerFrame, Welcome, WireError};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_tungstenite::tungstenite::Message;
@@ -62,12 +62,12 @@ fn text_of(message: Message) -> Option<String> {
 
 /// 连上服务器并登录。
 pub(crate) async fn connect(url: &str, auth: HelloAuth, device: &DeviceSecret, name: &str) -> Result<Connected> {
-    tokio::time::timeout(CONNECT_TIMEOUT, connect_inner(url, auth, device, name))
+    tokio::time::timeout(CONNECT_TIMEOUT, connect_inner(url, auth, device, name, device_kind()))
         .await
         .map_err(|_| ClientError::Timeout)?
 }
 
-async fn connect_inner(url: &str, auth: HelloAuth, device: &DeviceSecret, name: &str) -> Result<Connected> {
+async fn connect_inner(url: &str, auth: HelloAuth, device: &DeviceSecret, name: &str, kind: DeviceKind) -> Result<Connected> {
     let config = WebSocketConfig::default()
         .max_message_size(Some(limits::CLIENT_FRAME_MAX_BYTES))
         .max_frame_size(Some(limits::CLIENT_FRAME_MAX_BYTES));
@@ -112,6 +112,7 @@ async fn connect_inner(url: &str, auth: HelloAuth, device: &DeviceSecret, name: 
             auth,
             device: device.public(),
             name: name.to_owned(),
+            kind,
             sig: wire::sign_hello(device, &nonce),
         },
     };
@@ -205,6 +206,10 @@ async fn connect_inner(url: &str, auth: HelloAuth, device: &DeviceSecret, name: 
         welcome,
         pushes,
     })
+}
+
+pub(crate) fn device_kind() -> DeviceKind {
+    if cfg!(target_arch = "wasm32") { DeviceKind::Mobile } else { DeviceKind::Computer }
 }
 
 fn resolve(pending: &Mutex<Pending>, id: u64, result: std::result::Result<Response, WireError>) {

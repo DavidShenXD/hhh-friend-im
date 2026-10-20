@@ -102,7 +102,11 @@ pub(super) fn device_detail(device: &DeviceInfo, now: i64) -> String {
             _ => format!("{} 天前在线", minutes / 1440),
         }
     };
-    format!("加入于 {year}-{month:02}-{day:02} · {seen}")
+    let kind = matches!(device.kind, friend_im_client::core::wire::DeviceKind::Mobile).then(|| device.kind.label());
+    match kind {
+        Some(kind) => format!("{kind} · 加入于 {year}-{month:02}-{day:02} · {seen}"),
+        None => format!("加入于 {year}-{month:02}-{day:02} · {seen}"),
+    }
 }
 
 /// 等用户的下一个输入；关掉对话框、被新流程顶掉为 `None`。批准的事件只有批准流程收，这里跳过。
@@ -148,7 +152,7 @@ impl Server {
             Ok(which) => which,
             Err(error) => return Some(Err(error)),
         };
-        let title = matches!(which, Which::Approve(_)).then(|| "批准新电脑".to_owned());
+        let title = matches!(which, Which::Approve(_)).then(|| "批准新设备".to_owned());
         let (flow_id, rx) = self.flows.begin(Kind::Action);
         let result = ActionsStartResult { flow_id: flow_id.clone(), title };
         self.peer.respond(id.clone(), Ok(serde_json::to_value(result).expect("结果总能写成 JSON")));
@@ -245,7 +249,7 @@ impl Server {
                 })
                 .collect();
             ui.step(compact(json!({
-                "kind": "list", "caption": "登录着这个账号的电脑。移除后，那台电脑读不到之后的新消息。", "rows": rows,
+                "kind": "list", "caption": "登录着这个账号的设备。移除后，那台设备读不到之后的新消息。", "rows": rows,
                 "note": tip.take().map(|(text, warn)| note(&text, warn)),
                 "links": [link("regen", "重新生成恢复密钥")],
             })));
@@ -258,7 +262,7 @@ impl Server {
                     let Some(device) = list.iter().find(|d| d.id.to_string() == row && d.id != me) else { continue };
                     let step = json!({
                         "kind": "confirm", "caption": format!("移除「{}」？", device.name), "danger": true, "confirmLabel": "移除",
-                        "text": "那台电脑会立刻退出 Friend-IM，之后的新消息它读不到。它本机已有的聊天记录不会被远程删除。",
+                        "text": "那台设备会立刻退出 Friend-IM，之后的新消息它读不到。它本机已有的聊天记录不会被远程删除。",
                     });
                     match confirmed(ui, rx, step).await {
                         None => return,
@@ -267,7 +271,7 @@ impl Server {
                     }
                     ui.step(waiting("正在移除…"));
                     tip = Some(match live.client.remove_device(&device.id).await {
-                        Ok(()) => (format!("已移除「{}」。你的其它电脑也会收到提醒。", device.name), false),
+                        Ok(()) => (format!("已移除「{}」。你的其它设备也会收到提醒。", device.name), false),
                         Err(error) => {
                             tracing::info!(%error, "移除电脑没成");
                             (format!("没能移除「{}」：{}", device.name, said(&error)), true)
@@ -279,7 +283,7 @@ impl Server {
                 Input::Choose { choice, .. } if choice == "regen" => {
                     let step = json!({
                         "kind": "confirm", "caption": "重新生成恢复密钥？", "confirmLabel": "重新生成",
-                        "text": "旧的恢复密钥会立即失效。已经登录着的电脑不受影响。",
+                        "text": "旧的恢复密钥会立即失效。已经登录着的设备不受影响。",
                     });
                     match confirmed(ui, rx, step).await {
                         None => return,
@@ -796,6 +800,7 @@ mod tests {
             joined_ms: joined,
             last_seen_ms,
             online,
+            kind: friend_im_client::core::wire::DeviceKind::Computer,
         };
         let now = joined + 10 * day;
         assert_eq!(device_detail(&device(true, now), now), "加入于 2026-10-10 · 在线");

@@ -29,6 +29,7 @@ impl State {
         DeviceEntry {
             keys: self.creds.device.public(),
             name: self.config.device_name.clone(),
+            kind: crate::conn::device_kind(),
         }
     }
 
@@ -345,6 +346,7 @@ impl State {
             device: DeviceEntry {
                 keys: approval.info.device,
                 name: approval.info.name.clone(),
+                kind: approval.info.kind,
             },
             proof: approval.info.proof,
         };
