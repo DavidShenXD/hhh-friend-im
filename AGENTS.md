@@ -60,4 +60,6 @@ iPhone / iPad 上 HHH 在 App 里跑插件的 WASM 组件（`wasm32-wasip2`，`s
 ## 发版本
 
 只按发版本规范：改 `version` → 打标签 `v<版本>` 推上去 → `scripts/pack` 带上 `--publish`（`pack.ps1 -Publish`）。
+标签与 Release 标题都只用 `v<版本>`（例如 `v0.3.14`），必须完全一致，不拼接清单的 `name`、`Cindy IM` 或其他前后缀。
+打包工具默认以标签作为标题，不要另行覆盖为产品名加版本号；发布后读回 Release 核对标题，不一致时只修正标题并再次核对。
 令牌只放环境变量，不写进任何文件，也不要贴进对话或提交。用「发版本」skill。
