@@ -27,7 +27,11 @@ pub(crate) enum Input {
     /// 表单一步提交。
     Submit(BTreeMap<String, String>),
     /// 用户在一步里做了选择。
-    Choose { choice: String, row: Option<String>, selected: Vec<String> },
+    Choose {
+        choice: String,
+        row: Option<String>,
+        selected: Vec<String>,
+    },
     /// 宿主关掉了对话框，或新的流程顶掉了它。
     Cancel,
     /// 客户端库的批准事件（新电脑这边由登录流程自己收，旧电脑这边由推送转来）。
@@ -44,7 +48,10 @@ pub(crate) enum JoinEvent {
     /// 旧电脑输错了：还能再输（第几次尝试）。
     Retry { request: RequestId, attempt: u32 },
     /// 请求结束。
-    Closed { request: RequestId, reason: JoinCloseReason },
+    Closed {
+        request: RequestId,
+        reason: JoinCloseReason,
+    },
 }
 
 struct Running {
@@ -66,10 +73,22 @@ impl Flows {
         let flow_id = {
             let mut next = self.next.lock().expect("流程编号锁中毒");
             *next += 1;
-            format!("{}-{}", if kind == Kind::Login { "login" } else { "action" }, *next)
+            format!(
+                "{}-{}",
+                if kind == Kind::Login {
+                    "login"
+                } else {
+                    "action"
+                },
+                *next
+            )
         };
         let (tx, rx) = mpsc::unbounded_channel();
-        let old = self.current.lock().expect("流程锁中毒").replace(Running { flow_id: flow_id.clone(), kind, tx });
+        let old = self.current.lock().expect("流程锁中毒").replace(Running {
+            flow_id: flow_id.clone(),
+            kind,
+            tx,
+        });
         if let Some(old) = old {
             tracing::info!(old = %old.flow_id, "新的流程顶掉了还没结束的旧流程");
             let _ = old.tx.send(Input::Cancel);
@@ -88,7 +107,13 @@ impl Flows {
 
     /// 交给正在走的操作流程（旧电脑批准的事件）；没有就丢掉。
     pub(crate) fn send_to_action(&self, input: Input) {
-        if let Some(running) = self.current.lock().expect("流程锁中毒").as_ref().filter(|r| r.kind == Kind::Action) {
+        if let Some(running) = self
+            .current
+            .lock()
+            .expect("流程锁中毒")
+            .as_ref()
+            .filter(|r| r.kind == Kind::Action)
+        {
             let _ = running.tx.send(input);
         }
     }
@@ -103,15 +128,27 @@ impl Flows {
 
     /// 宿主的通知（`login/submit`、`login/cancel`、`action/submit`、`action/cancel`、`step/choose`）交给对应的流程。
     pub(crate) fn notified(&self, method: &str, params: Value) {
-        let flow_id = params.get("flowId").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let flow_id = params
+            .get("flowId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
         let input = match method {
             "login/submit" | "action/submit" => {
-                let values = params.get("values").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+                let values = params
+                    .get("values")
+                    .cloned()
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .unwrap_or_default();
                 Input::Submit(values)
             }
             "login/cancel" | "action/cancel" => Input::Cancel,
             "step/choose" => match serde_json::from_value::<StepChooseParams>(params) {
-                Ok(choose) => Input::Choose { choice: choose.choice, row: choose.row, selected: choose.selected },
+                Ok(choose) => Input::Choose {
+                    choice: choose.choice,
+                    row: choose.row,
+                    selected: choose.selected,
+                },
                 Err(error) => {
                     tracing::warn!(%error, "宿主发来的选择格式不对，忽略");
                     return;
@@ -135,24 +172,51 @@ pub(crate) struct Ui<'a> {
 impl Ui<'_> {
     /// 推一步（`step` 是协议的步骤 JSON）。
     pub(crate) fn step(&self, step: Value) {
-        let method = if self.kind == Kind::Login { "login/step" } else { "action/step" };
-        self.peer.notify(method, json!({ "flowId": self.flow_id, "step": step }));
+        let method = if self.kind == Kind::Login {
+            "login/step"
+        } else {
+            "action/step"
+        };
+        self.peer
+            .notify(method, json!({ "flowId": self.flow_id, "step": step }));
     }
 
     /// 操作做完（`title`、`message` 都没有时宿主直接关掉对话框）。
     pub(crate) fn done(&self, title: Option<&str>, message: Option<&str>) {
-        self.peer.notify("action/finished", json!({ "flowId": self.flow_id, "title": title, "message": message }));
+        self.peer.notify(
+            "action/finished",
+            json!({ "flowId": self.flow_id, "title": title, "message": message }),
+        );
+    }
+
+    /// 操作完成并打开指定结果会话；旧宿主忽略可选字段，仍显示成功页。
+    pub(crate) fn done_opening(
+        &self,
+        conversation: &friend_im_client::core::ids::ConvId,
+        title: Option<&str>,
+        message: Option<&str>,
+    ) {
+        self.peer.notify("action/finished", compact(json!({
+            "flowId": self.flow_id, "title": title, "message": message, "openConversationId": conversation.as_str(),
+        })));
     }
 
     /// 会话级操作做完，请宿主把这个会话从列表里拿掉（`removeFromList`，HHH 契约 provider-protocol v18 §2）：宿主当作取消
     /// 关注，对话框直接关掉；有新消息时会话照样回到列表。不认这个字段的旧宿主只关对话框。
     pub(crate) fn done_removing_from_list(&self) {
-        self.peer.notify("action/finished", json!({ "flowId": self.flow_id, "removeFromList": true }));
+        self.peer.notify(
+            "action/finished",
+            json!({ "flowId": self.flow_id, "removeFromList": true }),
+        );
     }
 
     /// 没做成。
     pub(crate) fn fail(&self, title: Option<&str>, message: &str, retry: Option<&str>) {
-        let method = if self.kind == Kind::Login { "login/failed" } else { "action/failed" };
+        let method = if self.kind == Kind::Login {
+            "login/failed"
+        } else {
+            "action/failed"
+        };
         self.peer.notify(
             method,
             json!({ "flowId": self.flow_id, "message": message, "retryable": retry.is_some(), "title": title, "retryLabel": retry }),
@@ -226,9 +290,15 @@ mod tests {
         assert!(flows.send(&first, Input::Submit(BTreeMap::new())));
         let (second, mut second_rx) = flows.begin(Kind::Action);
         assert!(matches!(first_rx.try_recv(), Ok(Input::Submit(_))));
-        assert!(matches!(first_rx.try_recv(), Ok(Input::Cancel)), "旧的收到取消");
+        assert!(
+            matches!(first_rx.try_recv(), Ok(Input::Cancel)),
+            "旧的收到取消"
+        );
         assert!(!flows.send(&first, Input::Cancel), "旧的编号不再收");
-        flows.send_to_action(Input::Join(JoinEvent::Retry { request: RequestId::random(), attempt: 2 }));
+        flows.send_to_action(Input::Join(JoinEvent::Retry {
+            request: RequestId::random(),
+            attempt: 2,
+        }));
         assert!(matches!(second_rx.try_recv(), Ok(Input::Join(_))));
         flows.end(&first);
         assert!(flows.send(&second, Input::Cancel), "结束旧的不影响新的");
@@ -236,16 +306,44 @@ mod tests {
         assert!(!flows.send(&second, Input::Cancel));
     }
 
+    #[test]
+    fn successful_creation_returns_its_exact_conversation_id() {
+        let (peer, mut writes) = super::super::peer::Peer::new();
+        let ui = Ui {
+            peer: &peer,
+            flow_id: "f-result".into(),
+            kind: Kind::Action,
+        };
+        let id = friend_im_client::core::ids::ConvId::from_raw([7; 16]);
+        ui.done_opening(&id, Some("已创建"), None);
+        let sent = writes.try_recv().unwrap();
+        assert_eq!(sent.method.as_deref(), Some("action/finished"));
+        assert_eq!(
+            sent.params,
+            Some(
+                json!({ "flowId": "f-result", "title": "已创建", "openConversationId": id.as_str() })
+            )
+        );
+    }
+
     // 宿主的通知按流程编号分发；格式不对的选择忽略。
     #[test]
     fn host_notifications_reach_the_flow() {
         let flows = Flows::default();
         let (id, mut rx) = flows.begin(Kind::Action);
-        flows.notified("step/choose", json!({ "flowId": id, "choice": "remove", "row": "mac" }));
-        flows.notified("action/submit", json!({ "flowId": id, "values": { "link": "x" } }));
+        flows.notified(
+            "step/choose",
+            json!({ "flowId": id, "choice": "remove", "row": "mac" }),
+        );
+        flows.notified(
+            "action/submit",
+            json!({ "flowId": id, "values": { "link": "x" } }),
+        );
         flows.notified("step/choose", json!({ "flowId": id }));
         flows.notified("action/cancel", json!({ "flowId": "other" }));
-        assert!(matches!(rx.try_recv(), Ok(Input::Choose { choice, row: Some(row), .. }) if choice == "remove" && row == "mac"));
+        assert!(
+            matches!(rx.try_recv(), Ok(Input::Choose { choice, row: Some(row), .. }) if choice == "remove" && row == "mac")
+        );
         assert!(matches!(rx.try_recv(), Ok(Input::Submit(values)) if values["link"] == "x"));
         assert!(rx.try_recv().is_err(), "格式不对与别的编号都没交过来");
     }
@@ -253,8 +351,15 @@ mod tests {
     // 出示恢复密钥一步照协议、在上限以内；去掉 null 后宿主读得懂。
     #[test]
     fn the_recovery_key_step_is_a_valid_protocol_step() {
-        let step: LoginStep = serde_json::from_value(recovery_key("这是你的恢复密钥", "abandon ability able about above absent absorb abstract absurd abuse access accident")).unwrap();
+        let step: LoginStep = serde_json::from_value(recovery_key(
+            "这是你的恢复密钥",
+            "abandon ability able about above absent absorb abstract absurd abuse access accident",
+        ))
+        .unwrap();
         assert_eq!(step_problem(&step), None);
-        assert_eq!(compact(json!({ "a": null, "b": [{ "c": null, "d": 1 }] })), json!({ "b": [{ "d": 1 }] }));
+        assert_eq!(
+            compact(json!({ "a": null, "b": [{ "c": null, "d": 1 }] })),
+            json!({ "b": [{ "d": 1 }] })
+        );
     }
 }

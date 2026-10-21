@@ -79,7 +79,10 @@ struct Friend {
 
 /// 客户端库的错误写成给人看的一句话。
 fn said(error: &ClientError) -> String {
-    errors::client(error).data.and_then(|d| d.user_message).unwrap_or_else(|| "出了点问题，稍后再试。".into())
+    errors::client(error)
+        .data
+        .and_then(|d| d.user_message)
+        .unwrap_or_else(|| "出了点问题，稍后再试。".into())
 }
 
 /// 身份指纹的前 8 位，分两组（如“3F2A 9C41”）。
@@ -102,7 +105,11 @@ pub(super) fn device_detail(device: &DeviceInfo, now: i64) -> String {
             _ => format!("{} 天前在线", minutes / 1440),
         }
     };
-    let kind = matches!(device.kind, friend_im_client::core::wire::DeviceKind::Mobile).then(|| device.kind.label());
+    let kind = matches!(
+        device.kind,
+        friend_im_client::core::wire::DeviceKind::Mobile
+    )
+    .then(|| device.kind.label());
     match kind {
         Some(kind) => format!("{kind} · 加入于 {year}-{month:02}-{day:02} · {seen}"),
         None => format!("加入于 {year}-{month:02}-{day:02} · {seen}"),
@@ -121,7 +128,11 @@ async fn next(rx: &mut mpsc::UnboundedReceiver<Input>) -> Option<Input> {
 }
 
 /// 子步骤的确认（危险操作、换链接）：左边的“取消”回到上一层。为真是确认了；`None` 是对话框关了。
-async fn confirmed(ui: &Ui<'_>, rx: &mut mpsc::UnboundedReceiver<Input>, step: Value) -> Option<bool> {
+async fn confirmed(
+    ui: &Ui<'_>,
+    rx: &mut mpsc::UnboundedReceiver<Input>,
+    step: Value,
+) -> Option<bool> {
     let mut step = step;
     step["cancelLabel"] = "取消".into();
     step["cancelChoice"] = "back".into();
@@ -135,15 +146,27 @@ async fn confirmed(ui: &Ui<'_>, rx: &mut mpsc::UnboundedReceiver<Input>, step: V
     }
 }
 
-fn person_row(id: &str, title: &str, detail: Option<&str>, tag: Option<&str>, actions: Vec<Value>) -> Value {
+fn person_row(
+    id: &str,
+    title: &str,
+    detail: Option<&str>,
+    tag: Option<&str>,
+    actions: Vec<Value>,
+) -> Value {
     // 没有按钮就不写 `actions`（空数组和没写是一回事，少一个键）。
     let actions = (!actions.is_empty()).then_some(actions);
-    compact(json!({ "id": id, "title": title, "detail": detail, "tag": tag, "icon": "person", "actions": actions }))
+    compact(
+        json!({ "id": id, "title": title, "detail": detail, "tag": tag, "icon": "person", "actions": actions }),
+    )
 }
 
 impl Server {
     /// `actions/start`：认出是哪一项、核对会话，开一个流程，先回流程编号再推第一步（回 `None`：已经回过了）。
-    pub(crate) async fn actions_start(self: &Arc<Self>, id: &RpcId, params: ActionsStartParams) -> Option<Result<Value, RpcError>> {
+    pub(crate) async fn actions_start(
+        self: &Arc<Self>,
+        id: &RpcId,
+        params: ActionsStartParams,
+    ) -> Option<Result<Value, RpcError>> {
         let live = match self.live().await {
             Ok(live) => live,
             Err(error) => return Some(Err(error)),
@@ -169,12 +192,22 @@ impl Server {
             _ => None,
         };
         let (flow_id, rx) = self.flows.begin(Kind::Action);
-        let result = ActionsStartResult { flow_id: flow_id.clone(), title };
-        self.peer.respond(id.clone(), Ok(serde_json::to_value(result).expect("结果总能写成 JSON")));
+        let result = ActionsStartResult {
+            flow_id: flow_id.clone(),
+            title,
+        };
+        self.peer.respond(
+            id.clone(),
+            Ok(serde_json::to_value(result).expect("结果总能写成 JSON")),
+        );
         tracing::info!(action = %params.action_id, "开始一项操作");
         let server = self.clone();
         tokio::spawn(async move {
-            let ui = Ui { peer: &server.peer, flow_id: flow_id.clone(), kind: Kind::Action };
+            let ui = Ui {
+                peer: &server.peer,
+                flow_id: flow_id.clone(),
+                kind: Kind::Action,
+            };
             server.clone().run_action(live, ui, which, rx).await;
             server.flows.end(&flow_id);
         });
@@ -199,20 +232,37 @@ impl Server {
             return Ok(which);
         }
         if ![MEMBERS, INVITE, LEAVE, DELETE].contains(&id) {
-            return Err(errors::of(ErrorKind::Unsupported, "Cindy IM 没有这项操作。"));
+            return Err(errors::of(
+                ErrorKind::Unsupported,
+                "Cindy IM 没有这项操作。",
+            ));
         }
-        let text = params.conversation_id.as_deref().ok_or_else(|| errors::of(ErrorKind::InvalidRequest, "这项操作要在会话里用。"))?;
-        let conv = ConvId::parse(text).map_err(|_| errors::of(ErrorKind::NotFound, "没有这个会话。"))?;
+        let text = params
+            .conversation_id
+            .as_deref()
+            .ok_or_else(|| errors::of(ErrorKind::InvalidRequest, "这项操作要在会话里用。"))?;
+        let conv =
+            ConvId::parse(text).map_err(|_| errors::of(ErrorKind::NotFound, "没有这个会话。"))?;
         // 删除会话私聊、群都有，退了的群也能删；不问服务器（连不上时也能清理列表）。
         if id == DELETE {
             return Ok(Which::Delete(conv));
         }
-        let info = live.client.conv_info(&conv).await.map_err(|e| errors::client(&e))?;
+        let info = live
+            .client
+            .conv_info(&conv)
+            .await
+            .map_err(|e| errors::client(&e))?;
         if info.kind != ConvKind::Group {
-            return Err(errors::of(ErrorKind::InvalidRequest, "这项操作只能用在群里。"));
+            return Err(errors::of(
+                ErrorKind::InvalidRequest,
+                "这项操作只能用在群里。",
+            ));
         }
         if !info.member {
-            return Err(errors::of(ErrorKind::InvalidRequest, "你已经不在这个群里了。"));
+            return Err(errors::of(
+                ErrorKind::InvalidRequest,
+                "你已经不在这个群里了。",
+            ));
         }
         Ok(match id {
             MEMBERS => Which::Members(conv),
@@ -221,7 +271,13 @@ impl Server {
         })
     }
 
-    async fn run_action(self: Arc<Self>, live: Arc<Live>, ui: Ui<'_>, which: Which, mut rx: mpsc::UnboundedReceiver<Input>) {
+    async fn run_action(
+        self: Arc<Self>,
+        live: Arc<Live>,
+        ui: Ui<'_>,
+        which: Which,
+        mut rx: mpsc::UnboundedReceiver<Input>,
+    ) {
         match which {
             Which::Approve(request) => self.approve(live, ui, &request, rx).await,
             Which::Devices => self.devices(&live, &ui, &mut rx).await,
@@ -256,7 +312,8 @@ impl Server {
                 .take(ROWS_MAX)
                 .map(|d| {
                     let mine = d.id == me;
-                    let actions = (!mine).then(|| vec![json!({ "id": "remove", "label": "移除", "danger": true })]);
+                    let actions = (!mine)
+                        .then(|| vec![json!({ "id": "remove", "label": "移除", "danger": true })]);
                     compact(json!({
                         "id": d.id.to_string(), "title": d.name, "detail": device_detail(d, now),
                         "tag": mine.then_some("本机"), "icon": "device", "actions": actions,
@@ -273,8 +330,15 @@ impl Server {
                 return;
             };
             match input {
-                Input::Choose { choice, row: Some(row), .. } if choice == "remove" => {
-                    let Some(device) = list.iter().find(|d| d.id.to_string() == row && d.id != me) else { continue };
+                Input::Choose {
+                    choice,
+                    row: Some(row),
+                    ..
+                } if choice == "remove" => {
+                    let Some(device) = list.iter().find(|d| d.id.to_string() == row && d.id != me)
+                    else {
+                        continue;
+                    };
                     let step = json!({
                         "kind": "confirm", "caption": format!("移除「{}」？", device.name), "danger": true, "confirmLabel": "移除",
                         "text": "那台设备会立刻退出 Cindy IM，之后的新消息它读不到。它本机已有的聊天记录不会被远程删除。",
@@ -286,10 +350,16 @@ impl Server {
                     }
                     ui.step(waiting("正在移除…"));
                     tip = Some(match live.client.remove_device(&device.id).await {
-                        Ok(()) => (format!("已移除「{}」。你的其它设备也会收到提醒。", device.name), false),
+                        Ok(()) => (
+                            format!("已移除「{}」。你的其它设备也会收到提醒。", device.name),
+                            false,
+                        ),
                         Err(error) => {
                             tracing::info!(%error, "移除电脑没成");
-                            (format!("没能移除「{}」：{}", device.name, said(&error)), true)
+                            (
+                                format!("没能移除「{}」：{}", device.name, said(&error)),
+                                true,
+                            )
                         }
                     });
                     // 移除自己做的，不用再提醒这台。
@@ -308,7 +378,10 @@ impl Server {
                     ui.step(waiting("正在生成…"));
                     match live.client.replace_recovery().await {
                         Ok(key) => {
-                            ui.step(recovery_key("这是新的恢复密钥，只显示这一次。旧的已经失效。", &key.to_words()));
+                            ui.step(recovery_key(
+                                "这是新的恢复密钥，只显示这一次。旧的已经失效。",
+                                &key.to_words(),
+                            ));
                             if !wait_confirm(rx).await {
                                 return;
                             }
@@ -381,7 +454,10 @@ impl Server {
                 Some(Input::Submit(values)) => values,
                 Some(_) => continue,
             };
-            let text = values.get("link").map(|t| t.trim().to_owned()).unwrap_or_default();
+            let text = values
+                .get("link")
+                .map(|t| t.trim().to_owned())
+                .unwrap_or_default();
             if let Ok(invite) = InviteLink::parse(&text) {
                 match self.join_by_link(live, ui, rx, &invite).await {
                     None | Some(Joined::Done) => return,
@@ -392,7 +468,10 @@ impl Server {
                 }
             }
             let Ok(link) = FriendLink::parse(&text) else {
-                warn = Some("这不是好友链接。好友链接以 https:// 开头，由对方在“我的好友链接”里复制给你。".into());
+                warn = Some(
+                    "这不是好友链接。好友链接以 https:// 开头，由对方在“我的好友链接”里复制给你。"
+                        .into(),
+                );
                 continue;
             };
             ui.step(waiting("正在核对…"));
@@ -423,14 +502,18 @@ impl Server {
             }
             ui.step(waiting("正在添加…"));
             match live.client.add_friend(&link).await {
-                Ok(_) => {
-                    ui.done(
+                Ok(conversation) => {
+                    ui.done_opening(&conversation,
                         Some(&format!("已添加{}", info.name)),
                         Some("私聊已出现在你们两边的会话列表，第一条提示写着“通过好友链接添加，身份已核对”。"),
                     );
                 }
                 Err(error) if error.code() == Some(ErrorCode::Conflict) => {
-                    ui.fail(Some("没有添加"), &format!("你和{}已经是好友了，私聊就在会话列表里。", info.name), None);
+                    ui.fail(
+                        Some("没有添加"),
+                        &format!("你和{}已经是好友了，私聊就在会话列表里。", info.name),
+                        None,
+                    );
                 }
                 Err(error) => {
                     tracing::info!(%error, "加好友没成");
@@ -442,7 +525,13 @@ impl Server {
     }
 
     /// 凭群邀请链接进群：确认 → 加入 → 完成。`None` 是对话框关了。
-    async fn join_by_link(&self, live: &Live, ui: &Ui<'_>, rx: &mut mpsc::UnboundedReceiver<Input>, invite: &InviteLink) -> Option<Joined> {
+    async fn join_by_link(
+        &self,
+        live: &Live,
+        ui: &Ui<'_>,
+        rx: &mut mpsc::UnboundedReceiver<Input>,
+        invite: &InviteLink,
+    ) -> Option<Joined> {
         let step = json!({
             "kind": "confirm", "caption": "加入这个群？", "confirmLabel": "加入",
             "text": "群里的人会看到你通过群邀请链接加入了群。加入后能看到群里以前的全部消息。",
@@ -453,15 +542,27 @@ impl Server {
         ui.step(waiting("正在加入…"));
         match live.client.join_by_invite(invite).await {
             Ok(conv) => {
-                let name = live.conversation(&conv).await.map(|c| c.name).unwrap_or_else(|_| "群聊".into());
-                ui.done(Some(&format!("已加入群「{name}」")), Some("群已出现在你的会话列表，群里以前的消息在后台补齐。"));
+                let name = live
+                    .conversation(&conv)
+                    .await
+                    .map(|c| c.name)
+                    .unwrap_or_else(|_| "群聊".into());
+                ui.done_opening(
+                    &conv,
+                    Some(&format!("已加入群「{name}」")),
+                    Some("群已出现在你的会话列表，群里以前的消息在后台补齐。"),
+                );
                 Some(Joined::Done)
             }
             Err(error) => {
                 tracing::info!(%error, "凭群邀请链接进群没成");
                 Some(Joined::Back(Some(match &error {
-                    ClientError::State(_) => "这条群邀请链接已经作废或过期了。请让群里的人重新发一条。".into(),
-                    _ if error.code() == Some(ErrorCode::NotFound) => "这条群邀请链接已经作废或过期了。请让群里的人重新发一条。".into(),
+                    ClientError::State(_) => {
+                        "这条群邀请链接已经作废或过期了。请让群里的人重新发一条。".into()
+                    }
+                    _ if error.code() == Some(ErrorCode::NotFound) => {
+                        "这条群邀请链接已经作废或过期了。请让群里的人重新发一条。".into()
+                    }
                     ClientError::Verify(_) => "链接里的钥匙和群邀请对不上，没有加入。".into(),
                     _ => said(&error),
                 })))
@@ -483,7 +584,12 @@ impl Server {
                     continue;
                 }
             };
-            if let Some(peer) = info.members.iter().map(|m| m.uid.clone()).find(|u| *u != live.me) {
+            if let Some(peer) = info
+                .members
+                .iter()
+                .map(|m| m.uid.clone())
+                .find(|u| *u != live.me)
+            {
                 let detail = match info.via {
                     Some(Via::Group { .. }) => "好友 · 通过群认识",
                     _ => "好友 · 身份已核对",
@@ -494,8 +600,14 @@ impl Server {
             }
         }
         let names = live.names(found.iter().map(|(u, _)| u.clone())).await;
-        let mut friends: Vec<Friend> =
-            found.into_iter().map(|(uid, detail)| Friend { name: names.get(&uid).cloned().unwrap_or_else(|| "有人".into()), uid, detail }).collect();
+        let mut friends: Vec<Friend> = found
+            .into_iter()
+            .map(|(uid, detail)| Friend {
+                name: names.get(&uid).cloned().unwrap_or_else(|| "有人".into()),
+                uid,
+                detail,
+            })
+            .collect();
         friends.sort_by(|a, b| a.name.cmp(&b.name));
         friends.truncate(ROWS_MAX);
         Ok(friends)
@@ -513,7 +625,10 @@ impl Server {
             match next(rx).await {
                 None => return,
                 Some(Input::Submit(values)) => {
-                    let name = values.get("name").map(|n| n.trim().to_owned()).unwrap_or_default();
+                    let name = values
+                        .get("name")
+                        .map(|n| n.trim().to_owned())
+                        .unwrap_or_default();
                     if name.is_empty() {
                         warn = Some("群名不能是空的。");
                     } else if name.chars().count() > GROUP_NAME_MAX_CHARS {
@@ -533,7 +648,10 @@ impl Server {
                 return;
             }
         };
-        let rows: Vec<Value> = friends.iter().map(|f| person_row(f.uid.as_str(), &f.name, Some(f.detail), None, vec![])).collect();
+        let rows: Vec<Value> = friends
+            .iter()
+            .map(|f| person_row(f.uid.as_str(), &f.name, Some(f.detail), None, vec![]))
+            .collect();
         ui.step(compact(json!({
             "kind": "list", "caption": "选要拉进群的好友（之后还能再邀请）。", "rows": rows,
             "select": { "min": 1, "confirmLabel": "创建" }, "empty": "还没有好友。先在“加好友”里加几个人。",
@@ -541,21 +659,37 @@ impl Server {
         let selected = loop {
             match next(rx).await {
                 None => return,
-                Some(Input::Choose { choice, selected, .. }) if choice == "confirm" && !selected.is_empty() => break selected,
+                Some(Input::Choose {
+                    choice, selected, ..
+                }) if choice == "confirm" && !selected.is_empty() => break selected,
                 Some(_) => {}
             }
         };
-        let chosen: Vec<&Friend> = friends.iter().filter(|f| selected.iter().any(|s| s == f.uid.as_str())).collect();
+        let chosen: Vec<&Friend> = friends
+            .iter()
+            .filter(|f| selected.iter().any(|s| s == f.uid.as_str()))
+            .collect();
         let uids: Vec<Uid> = chosen.iter().map(|f| f.uid.clone()).collect();
         ui.step(waiting("正在建群…"));
-        let profile = GroupProfile { name: name.clone(), description: String::new(), avatar: None };
+        let profile = GroupProfile {
+            name: name.clone(),
+            description: String::new(),
+            avatar: None,
+        };
         match live.client.create_group(&profile, &uids).await {
-            Ok(_) => {
+            Ok(conversation) => {
                 let me = live.client.name().await;
-                let others = chosen.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join("、");
-                ui.done(
+                let others = chosen
+                    .iter()
+                    .map(|f| f.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("、");
+                ui.done_opening(
+                    &conversation,
                     Some(&format!("群「{name}」已创建")),
-                    Some(&format!("群已出现在每个成员的会话列表，第一条提示“{me} 创建了群，加入了 {others}”。")),
+                    Some(&format!(
+                        "群已出现在每个成员的会话列表，第一条提示“{me} 创建了群，加入了 {others}”。"
+                    )),
                 );
             }
             Err(error) => {
@@ -566,8 +700,18 @@ impl Server {
     }
 
     /// 群成员（S13）：群主能移出别人。
-    async fn members(&self, live: &Live, ui: &Ui<'_>, rx: &mut mpsc::UnboundedReceiver<Input>, conv: &ConvId) {
-        let details: HashMap<Uid, &'static str> = self.friends(live).await.map(|f| f.into_iter().map(|f| (f.uid, f.detail)).collect()).unwrap_or_default();
+    async fn members(
+        &self,
+        live: &Live,
+        ui: &Ui<'_>,
+        rx: &mut mpsc::UnboundedReceiver<Input>,
+        conv: &ConvId,
+    ) {
+        let details: HashMap<Uid, &'static str> = self
+            .friends(live)
+            .await
+            .map(|f| f.into_iter().map(|f| (f.uid, f.detail)).collect())
+            .unwrap_or_default();
         let mut tip: Option<(String, bool)> = None;
         loop {
             let info = match live.client.conv_info(conv).await {
@@ -582,7 +726,11 @@ impl Server {
                     return;
                 }
             };
-            let group = live.conversation(conv).await.map(|c| c.name).unwrap_or_else(|_| "群聊".into());
+            let group = live
+                .conversation(conv)
+                .await
+                .map(|c| c.name)
+                .unwrap_or_else(|_| "群聊".into());
             let names = live.names(info.members.iter().map(|m| m.uid.clone())).await;
             let name_of = |uid: &Uid| names.get(uid).cloned().unwrap_or_else(|| "有人".into());
             let mine = info.owner == live.me;
@@ -590,7 +738,10 @@ impl Server {
             let caption = if mine {
                 format!("{count} 位成员。你是群主，可以移出成员。")
             } else {
-                format!("{count} 位成员。只有群主{}能移出成员。", name_of(&info.owner))
+                format!(
+                    "{count} 位成员。只有群主{}能移出成员。",
+                    name_of(&info.owner)
+                )
             };
             let rows: Vec<Value> = info
                 .members
@@ -598,7 +749,11 @@ impl Server {
                 .take(ROWS_MAX)
                 .map(|m| {
                     let me = m.uid == live.me;
-                    let detail = if me { Some("你自己") } else { details.get(&m.uid).copied() };
+                    let detail = if me {
+                        Some("你自己")
+                    } else {
+                        details.get(&m.uid).copied()
+                    };
                     // 别人那一行都能“发消息”（S10，不用先加好友）；群主还能移出。
                     let mut actions = Vec::new();
                     if !me {
@@ -607,7 +762,13 @@ impl Server {
                     if mine && !me {
                         actions.push(json!({ "id": "remove", "label": "移出", "danger": true }));
                     }
-                    person_row(m.uid.as_str(), &name_of(&m.uid), detail, (m.uid == info.owner).then_some("群主"), actions)
+                    person_row(
+                        m.uid.as_str(),
+                        &name_of(&m.uid),
+                        detail,
+                        (m.uid == info.owner).then_some("群主"),
+                        actions,
+                    )
                 })
                 .collect();
             ui.step(compact(json!({
@@ -615,25 +776,49 @@ impl Server {
             })));
             match next(rx).await {
                 None => return,
-                Some(Input::Choose { choice, row: Some(row), .. }) if choice == "message" => {
-                    let Some(target) = info.members.iter().find(|m| m.uid.as_str() == row && m.uid != live.me).map(|m| m.uid.clone()) else {
+                Some(Input::Choose {
+                    choice,
+                    row: Some(row),
+                    ..
+                }) if choice == "message" => {
+                    let Some(target) = info
+                        .members
+                        .iter()
+                        .find(|m| m.uid.as_str() == row && m.uid != live.me)
+                        .map(|m| m.uid.clone())
+                    else {
                         continue;
                     };
                     let who = name_of(&target);
                     ui.step(waiting("正在打开私聊…"));
                     match live.client.open_dm(&target, conv).await {
                         // 新建的私聊随推送进会话列表；已经有的照旧在那里。
-                        Ok(_) => ui.done(Some(&format!("和「{who}」私聊")), Some("私聊在你的会话列表里，点开就能聊，不用先加好友。")),
+                        Ok(_) => ui.done(
+                            Some(&format!("和「{who}」私聊")),
+                            Some("私聊在你的会话列表里，点开就能聊，不用先加好友。"),
+                        ),
                         Err(error) => {
                             tracing::info!(%conv, %error, "和群成员私聊没成");
-                            tip = Some((format!("没能打开和「{who}」的私聊：{}", said(&error)), true));
+                            tip = Some((
+                                format!("没能打开和「{who}」的私聊：{}", said(&error)),
+                                true,
+                            ));
                             continue;
                         }
                     }
                     return;
                 }
-                Some(Input::Choose { choice, row: Some(row), .. }) if choice == "remove" && mine => {
-                    let Some(target) = info.members.iter().find(|m| m.uid.as_str() == row && m.uid != live.me).map(|m| m.uid.clone()) else {
+                Some(Input::Choose {
+                    choice,
+                    row: Some(row),
+                    ..
+                }) if choice == "remove" && mine => {
+                    let Some(target) = info
+                        .members
+                        .iter()
+                        .find(|m| m.uid.as_str() == row && m.uid != live.me)
+                        .map(|m| m.uid.clone())
+                    else {
                         continue;
                     };
                     let (me, who) = (live.client.name().await, name_of(&target));
@@ -661,19 +846,32 @@ impl Server {
     }
 
     /// 邀请成员（S12）：勾选不在群里的好友，或改用群邀请链接。
-    async fn invite(&self, live: &Live, ui: &Ui<'_>, rx: &mut mpsc::UnboundedReceiver<Input>, conv: &ConvId) {
+    async fn invite(
+        &self,
+        live: &Live,
+        ui: &Ui<'_>,
+        rx: &mut mpsc::UnboundedReceiver<Input>,
+        conv: &ConvId,
+    ) {
         let mut invite_link: Option<String> = None;
         loop {
-            let (info, friends) = match (live.client.conv_info(conv).await, self.friends(live).await) {
-                (Ok(info), Ok(friends)) => (info, friends),
-                (Err(error), _) | (_, Err(error)) => {
-                    tracing::info!(%conv, %error, "邀请成员要的资料取不到");
-                    ui.fail(Some("没有完成"), &said(&error), Some("再试一次"));
-                    return;
-                }
-            };
-            let candidates: Vec<&Friend> = friends.iter().filter(|f| !info.members.iter().any(|m| m.uid == f.uid)).collect();
-            let rows: Vec<Value> = candidates.iter().map(|f| person_row(f.uid.as_str(), &f.name, Some(f.detail), None, vec![])).collect();
+            let (info, friends) =
+                match (live.client.conv_info(conv).await, self.friends(live).await) {
+                    (Ok(info), Ok(friends)) => (info, friends),
+                    (Err(error), _) | (_, Err(error)) => {
+                        tracing::info!(%conv, %error, "邀请成员要的资料取不到");
+                        ui.fail(Some("没有完成"), &said(&error), Some("再试一次"));
+                        return;
+                    }
+                };
+            let candidates: Vec<&Friend> = friends
+                .iter()
+                .filter(|f| !info.members.iter().any(|m| m.uid == f.uid))
+                .collect();
+            let rows: Vec<Value> = candidates
+                .iter()
+                .map(|f| person_row(f.uid.as_str(), &f.name, Some(f.detail), None, vec![]))
+                .collect();
             ui.step(compact(json!({
                 "kind": "list", "caption": "新成员能看到群里以前的全部消息。", "rows": rows,
                 "select": { "min": 1, "confirmLabel": "邀请" }, "empty": "好友都已经在群里了。",
@@ -681,15 +879,27 @@ impl Server {
             })));
             match next(rx).await {
                 None => return,
-                Some(Input::Choose { choice, selected, .. }) if choice == "confirm" && !selected.is_empty() => {
-                    let chosen: Vec<&&Friend> = candidates.iter().filter(|f| selected.iter().any(|s| s == f.uid.as_str())).collect();
+                Some(Input::Choose {
+                    choice, selected, ..
+                }) if choice == "confirm" && !selected.is_empty() => {
+                    let chosen: Vec<&&Friend> = candidates
+                        .iter()
+                        .filter(|f| selected.iter().any(|s| s == f.uid.as_str()))
+                        .collect();
                     let uids: Vec<Uid> = chosen.iter().map(|f| f.uid.clone()).collect();
                     ui.step(waiting("正在邀请…"));
                     match live.client.invite(conv, &uids).await {
                         Ok(()) => {
                             let me = live.client.name().await;
-                            let names = chosen.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join("、");
-                            ui.done(Some("已邀请"), Some(&format!("群里所有人都会看到“{me} 邀请 {names} 加入了群”。")));
+                            let names = chosen
+                                .iter()
+                                .map(|f| f.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join("、");
+                            ui.done(
+                                Some("已邀请"),
+                                Some(&format!("群里所有人都会看到“{me} 邀请 {names} 加入了群”。")),
+                            );
                         }
                         Err(error) => {
                             tracing::info!(%conv, %error, "邀请成员没成");
@@ -732,8 +942,18 @@ impl Server {
     }
 
     /// 退出群（S13）。
-    async fn leave(&self, live: &Live, ui: &Ui<'_>, rx: &mut mpsc::UnboundedReceiver<Input>, conv: &ConvId) {
-        let group = live.conversation(conv).await.map(|c| c.name).unwrap_or_else(|_| "群聊".into());
+    async fn leave(
+        &self,
+        live: &Live,
+        ui: &Ui<'_>,
+        rx: &mut mpsc::UnboundedReceiver<Input>,
+        conv: &ConvId,
+    ) {
+        let group = live
+            .conversation(conv)
+            .await
+            .map(|c| c.name)
+            .unwrap_or_else(|_| "群聊".into());
         ui.step(json!({
             "kind": "confirm", "caption": format!("退出「{group}」？"), "danger": true, "confirmLabel": "退出群",
             "text": "退出后读不到群里之后的新消息；以前的消息还在这台电脑上。要回来需要群里的人重新邀请。",
@@ -758,7 +978,10 @@ impl Server {
 
 /// 删除会话的确认：可撤销，不用危险色。会话名读不到时不写名字。
 fn delete_step(name: Option<&str>) -> Value {
-    let caption = name.map_or_else(|| "删除这个会话？".to_owned(), |name| format!("删除「{name}」？"));
+    let caption = name.map_or_else(
+        || "删除这个会话？".to_owned(),
+        |name| format!("删除「{name}」？"),
+    );
     json!({ "kind": "confirm", "caption": caption, "confirmLabel": "删除",
         "text": "只从你的列表里拿掉，聊天记录还在；有新消息时会再出现。" })
 }
@@ -766,7 +989,12 @@ fn delete_step(name: Option<&str>) -> Value {
 /// 删除会话（HHH 契约 provider-protocol v18 §4）：私聊、群都有。确认后不动服务器、不删本机记录，只请宿主把它从列表里
 /// 拿掉（对话框直接关掉）；这个会话以后有新消息（包括系统提示）时照样回到列表。取消就什么都不做。
 async fn delete(live: &Live, ui: &Ui<'_>, rx: &mut mpsc::UnboundedReceiver<Input>, conv: &ConvId) {
-    let name = live.conversation(conv).await.map(|c| c.name).ok().filter(|name| !name.trim().is_empty());
+    let name = live
+        .conversation(conv)
+        .await
+        .map(|c| c.name)
+        .ok()
+        .filter(|name| !name.trim().is_empty());
     ui.step(delete_step(name.as_deref()));
     loop {
         match next(rx).await {
@@ -818,30 +1046,58 @@ mod tests {
             kind: friend_im_client::core::wire::DeviceKind::Computer,
         };
         let now = joined + 10 * day;
-        assert_eq!(device_detail(&device(true, now), now), "加入于 2026-10-10 · 在线");
-        assert_eq!(device_detail(&device(false, now - 30_000), now), "加入于 2026-10-10 · 刚刚在线");
-        assert_eq!(device_detail(&device(false, now - 5 * 60_000), now), "加入于 2026-10-10 · 5 分钟前在线");
-        assert_eq!(device_detail(&device(false, now - 3 * 3_600_000), now), "加入于 2026-10-10 · 3 小时前在线");
-        assert_eq!(device_detail(&device(false, now - 32 * day), now), "加入于 2026-10-10 · 32 天前在线");
+        assert_eq!(
+            device_detail(&device(true, now), now),
+            "加入于 2026-10-10 · 在线"
+        );
+        assert_eq!(
+            device_detail(&device(false, now - 30_000), now),
+            "加入于 2026-10-10 · 刚刚在线"
+        );
+        assert_eq!(
+            device_detail(&device(false, now - 5 * 60_000), now),
+            "加入于 2026-10-10 · 5 分钟前在线"
+        );
+        assert_eq!(
+            device_detail(&device(false, now - 3 * 3_600_000), now),
+            "加入于 2026-10-10 · 3 小时前在线"
+        );
+        assert_eq!(
+            device_detail(&device(false, now - 32 * day), now),
+            "加入于 2026-10-10 · 32 天前在线"
+        );
     }
 
     // 操作里推的每种步骤照协议、在上限以内（去掉 null 后宿主读得懂）。
     #[test]
     fn action_steps_are_valid_protocol_steps() {
-        let rows = vec![person_row("u1", "王小明", Some("好友 · 身份已核对"), Some("群主"), vec![json!({ "id": "remove", "label": "移出", "danger": true })])];
+        let rows = vec![person_row(
+            "u1",
+            "王小明",
+            Some("好友 · 身份已核对"),
+            Some("群主"),
+            vec![json!({ "id": "remove", "label": "移出", "danger": true })],
+        )];
         let mut confirm = json!({ "kind": "confirm", "caption": "换一条链接？", "confirmLabel": "换一条", "text": "旧链接会立即失效。" });
         confirm["cancelLabel"] = "取消".into();
         confirm["cancelChoice"] = "back".into();
         for step in [
-            compact(json!({ "kind": "list", "caption": "选要拉进群的好友（之后还能再邀请）。", "rows": rows,
-                "select": { "min": 1, "confirmLabel": "创建" }, "empty": "还没有好友。", "note": null })),
-            compact(json!({ "kind": "showText", "layout": "line", "text": "https://im.example.com/f/abc#def", "copy": true,
-                "caption": "把这条链接发给想加你的人。", "links": [link("renew", "换一条链接")] })),
+            compact(
+                json!({ "kind": "list", "caption": "选要拉进群的好友（之后还能再邀请）。", "rows": rows,
+                "select": { "min": 1, "confirmLabel": "创建" }, "empty": "还没有好友。", "note": null }),
+            ),
+            compact(
+                json!({ "kind": "showText", "layout": "line", "text": "https://im.example.com/f/abc#def", "copy": true,
+                "caption": "把这条链接发给想加你的人。", "links": [link("renew", "换一条链接")] }),
+            ),
             compact(confirm),
-            compact(json!({ "kind": "confirm", "caption": "加王小明为好友？", "confirmLabel": "加好友",
-                "person": { "name": "王小明", "detail": "身份指纹 3F2A 9C41 · 和链接里的一致" } })),
+            compact(
+                json!({ "kind": "confirm", "caption": "加王小明为好友？", "confirmLabel": "加好友",
+                "person": { "name": "王小明", "detail": "身份指纹 3F2A 9C41 · 和链接里的一致" } }),
+            ),
         ] {
-            let parsed: LoginStep = serde_json::from_value(step.clone()).unwrap_or_else(|e| panic!("{e}: {step}"));
+            let parsed: LoginStep =
+                serde_json::from_value(step.clone()).unwrap_or_else(|e| panic!("{e}: {step}"));
             assert_eq!(step_problem(&parsed), None, "{step}");
         }
     }
@@ -851,20 +1107,34 @@ mod tests {
     #[test]
     fn deleting_a_conversation_only_asks_the_host_to_take_it_off_the_list() {
         for step in [delete_step(Some("周末徒步")), delete_step(None)] {
-            let parsed: LoginStep = serde_json::from_value(step.clone()).unwrap_or_else(|e| panic!("{e}: {step}"));
+            let parsed: LoginStep =
+                serde_json::from_value(step.clone()).unwrap_or_else(|e| panic!("{e}: {step}"));
             assert_eq!(step_problem(&parsed), None, "{step}");
             assert!(step.get("danger").is_none(), "可撤销，不用危险色：{step}");
             assert_eq!(step["confirmLabel"], "删除");
-            assert_eq!(step["text"], "只从你的列表里拿掉，聊天记录还在；有新消息时会再出现。");
+            assert_eq!(
+                step["text"],
+                "只从你的列表里拿掉，聊天记录还在；有新消息时会再出现。"
+            );
         }
-        assert_eq!(delete_step(Some("周末徒步"))["caption"], "删除「周末徒步」？");
+        assert_eq!(
+            delete_step(Some("周末徒步"))["caption"],
+            "删除「周末徒步」？"
+        );
         assert_eq!(delete_step(None)["caption"], "删除这个会话？");
 
         let (peer, mut writes) = super::super::peer::Peer::new();
-        let ui = Ui { peer: &peer, flow_id: "f1".into(), kind: Kind::Action };
+        let ui = Ui {
+            peer: &peer,
+            flow_id: "f1".into(),
+            kind: Kind::Action,
+        };
         ui.done_removing_from_list();
         let sent = writes.try_recv().unwrap();
         assert_eq!(sent.method.as_deref(), Some("action/finished"));
-        assert_eq!(sent.params, Some(json!({ "flowId": "f1", "removeFromList": true })));
+        assert_eq!(
+            sent.params,
+            Some(json!({ "flowId": "f1", "removeFromList": true }))
+        );
     }
 }

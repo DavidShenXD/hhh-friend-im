@@ -8,10 +8,13 @@
 //!   （[`super::actions`]）；能读头像（头像键是 Cindy 头像地址）、会推“人变了”（收到别人的个人资料）。
 
 use friend_im_client::core::limits;
-use hhh_im_protocol::method::{ActionDecl, ActionScope, InitializeParams, InitializeResult, ProviderInfo};
+use hhh_im_protocol::method::{
+    ActionDecl, ActionScope, InitializeParams, InitializeResult, ProviderInfo,
+};
 use hhh_im_protocol::platform::{
-    ActionRules, AvatarShape, Capabilities, ConversationCaps, DiscoveryDesc, EventCaps, HistoryMode, Limits, MessageCaps,
-    OwnWithin, PeopleCaps, PlatformDesc, RateBudget, ResourceCaps, SendCaps, SettingDecl,
+    ActionRules, AvatarShape, Capabilities, ConversationCaps, DiscoveryDesc, EventCaps,
+    HistoryMode, Limits, MessageCaps, OwnWithin, PeopleCaps, PlatformDesc, RateBudget,
+    ResourceCaps, SendCaps, SettingDecl,
 };
 use hhh_im_protocol::rpc::{ErrorKind, RpcError};
 use hhh_im_protocol::types::ConversationKind;
@@ -44,7 +47,10 @@ pub(crate) fn platform() -> PlatformDesc {
             reply: true,
             thread: false,
             react: false,
-            recall: Some(OwnWithin { own: true, within_secs: None }),
+            recall: Some(OwnWithin {
+                own: true,
+                within_secs: None,
+            }),
             edit: None,
         },
         chat_link: None,
@@ -52,7 +58,10 @@ pub(crate) fn platform() -> PlatformDesc {
         conversation_nouns: None,
         page_max: Some(PAGE_MAX),
         // 服务器不限读取；新电脑补齐 1 万条要翻 100 页（契约 §7：5 分钟内），比宿主默认的每分钟 120 次放宽一些。
-        reads: Some(RateBudget { per_second: 20, per_minute: 600 }),
+        reads: Some(RateBudget {
+            per_second: 20,
+            per_minute: 600,
+        }),
         downloads: None,
         file_segment_bytes: Some(FILE_SEGMENT_BYTES),
         limits: Some(Limits {
@@ -67,26 +76,62 @@ pub(crate) fn platform() -> PlatformDesc {
         emoji_per_account: false,
         emoji: None,
         // 会话发现：一次问到底（服务器一次给全，至多 1000 个会话）。
-        discovery: Some(DiscoveryDesc { fastest_secs: 30, pages: 1, cold_pages: 1 }),
+        discovery: Some(DiscoveryDesc {
+            fastest_secs: 30,
+            pages: 1,
+            cold_pages: 1,
+        }),
         user_adjustable: Vec::new(),
         edits_by_content: Vec::new(),
         retranslate_rules: Vec::new(),
+        content_repairs: Vec::new(),
+        content_rereads: Vec::new(),
     }
 }
 
 /// 能力：做得到的都声明，做不到的（搜索、编辑、表情、定位私聊）不声明。
 pub(crate) fn capabilities() -> Capabilities {
     Capabilities {
-        conversations: ConversationCaps { list: true, search: false, members: true, find_direct: false, recent_activity: true },
-        messages: MessageCaps { list: true, get: false },
-        people: PeopleCaps { get: true, search: false },
-        send: Some(SendCaps { text: true, mentions: true, mention_all: true, image: true, file: true, lookup: true }),
+        conversations: ConversationCaps {
+            list: true,
+            search: false,
+            members: true,
+            find_direct: false,
+            recent_activity: true,
+        },
+        messages: MessageCaps {
+            list: true,
+            get: false,
+        },
+        people: PeopleCaps {
+            get: true,
+            search: false,
+            ..Default::default()
+        },
+        send: Some(SendCaps {
+            text: true,
+            mentions: true,
+            mention_all: true,
+            image: true,
+            file: true,
+            lookup: true,
+        }),
         recall: true,
         edit: false,
         reactions: Default::default(),
-        resources: ResourceCaps { read: true, avatars: true },
-        events: EventCaps { messages: true, deletions: false, reactions: false, conversations: true, people: true },
+        resources: ResourceCaps {
+            read: true,
+            avatars: true,
+        },
+        events: EventCaps {
+            messages: true,
+            deletions: false,
+            reactions: false,
+            conversations: true,
+            people: true,
+        },
         retranslate: false,
+        message_maintenance: false,
         session: Default::default(),
     }
 }
@@ -98,7 +143,9 @@ pub(crate) fn settings() -> Vec<SettingDecl> {
         label: "服务器地址".into(),
         required: true,
         // 同 `credential::server_url`：https 网址本身；本机测试可以是 http://127.0.0.1 或 http://localhost。
-        pattern: Some(r"^\s*(https://[^\s/?#@]+|http://(127\.0\.0\.1|localhost)(:[0-9]+)?)/?\s*$".into()),
+        pattern: Some(
+            r"^\s*(https://[^\s/?#@]+|http://(127\.0\.0\.1|localhost)(:[0-9]+)?)/?\s*$".into(),
+        ),
         help: Some("你的 Cindy IM 服务器（https 网址）。换了服务器要重新登录。".into()),
         field_type: Some("text".into()),
         default: Some(DEFAULT_SERVER.into()),
@@ -109,19 +156,26 @@ pub(crate) fn settings() -> Vec<SettingDecl> {
 /// 插件的操作（原型 friend-im-v2）：账号级的进“管理”菜单，群的三项进群的会话菜单；“删除会话”（HHH 契约
 /// provider-protocol v18 §4）不写种类，私聊、群都有，排在最后。
 pub(crate) fn actions() -> Vec<ActionDecl> {
-    let account = |id: &str, label: &str| ActionDecl { id: id.into(), label: label.into(), scope: ActionScope::Account, conversation_kinds: Vec::new() };
+    let account = |id: &str, label: &str, shortcut: bool| ActionDecl {
+        id: id.into(),
+        label: label.into(),
+        scope: ActionScope::Account,
+        shortcut,
+        conversation_kinds: Vec::new(),
+    };
     let group = |id: &str, label: &str| ActionDecl {
         id: id.into(),
         label: label.into(),
         scope: ActionScope::Conversation,
+        shortcut: false,
         conversation_kinds: vec![ConversationKind::Group],
     };
     vec![
-        account(actions::DEVICES, "我的设备"),
-        account(actions::LINK, "我的好友链接"),
-        account(actions::ADD, "加好友"),
-        account(actions::GROUP, "新建群"),
-        account(actions::ABOUT, "关于加密"),
+        account(actions::DEVICES, "我的设备", false),
+        account(actions::ADD, "加好友", true),
+        account(actions::GROUP, "新建群", true),
+        account(actions::LINK, "我的好友链接", true),
+        account(actions::ABOUT, "关于加密", false),
         group(actions::MEMBERS, "群成员"),
         group(actions::INVITE, "邀请成员"),
         group(actions::LEAVE, "退出群"),
@@ -129,6 +183,7 @@ pub(crate) fn actions() -> Vec<ActionDecl> {
             id: actions::DELETE.into(),
             label: "删除会话".into(),
             scope: ActionScope::Conversation,
+            shortcut: false,
             conversation_kinds: Vec::new(),
         },
     ]
@@ -138,7 +193,11 @@ pub(crate) fn actions() -> Vec<ActionDecl> {
 pub(crate) fn result() -> InitializeResult {
     InitializeResult {
         protocol_version: 1,
-        provider: ProviderInfo { id: PROVIDER_ID.into(), name: PROVIDER_NAME.into(), version: env!("CARGO_PKG_VERSION").into() },
+        provider: ProviderInfo {
+            id: PROVIDER_ID.into(),
+            name: PROVIDER_NAME.into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+        },
         platform: platform(),
         capabilities: capabilities(),
         settings: settings(),
@@ -150,7 +209,10 @@ pub(crate) fn result() -> InitializeResult {
 /// `initialize`：宿主列出的版本里要有 1。
 pub(crate) fn initialize(params: &InitializeParams) -> Result<Value, RpcError> {
     if !params.protocol_versions.contains(&1) {
-        return Err(errors::of(ErrorKind::Unsupported, "Cindy IM 插件只会协议第 1 版，和这个 HHH 不兼容。"));
+        return Err(errors::of(
+            ErrorKind::Unsupported,
+            "Cindy IM 插件只会协议第 1 版，和这个 HHH 不兼容。",
+        ));
     }
     Ok(serde_json::to_value(result()).expect("握手结果总能写成 JSON"))
 }
@@ -165,30 +227,69 @@ mod tests {
         assert_eq!(result["provider"]["id"], PROVIDER_ID);
         assert_eq!(result["platform"]["history"], "server");
         assert_eq!(result["platform"]["pageMax"], 100);
-        assert_eq!(result["capabilities"]["messages"]["list"], true, "history=server 必须能读消息（§5.2）");
-        assert_eq!(result["capabilities"]["conversations"]["recentActivity"], true, "声明了会话发现就要能答");
+        assert_eq!(
+            result["capabilities"]["messages"]["list"], true,
+            "history=server 必须能读消息（§5.2）"
+        );
+        assert_eq!(
+            result["capabilities"]["conversations"]["recentActivity"], true,
+            "声明了会话发现就要能答"
+        );
         assert_eq!(result["settings"][0]["default"], DEFAULT_SERVER);
-        assert_eq!(result["loginMethods"][0]["kind"], "host", "只有用 Cindy 账号登录");
+        assert_eq!(
+            result["loginMethods"][0]["kind"], "host",
+            "只有用 Cindy 账号登录"
+        );
         assert_eq!(result["loginMethods"].as_array().unwrap().len(), 1);
         assert_eq!(result["capabilities"]["resources"]["avatars"], true);
         assert_eq!(result["capabilities"]["events"]["people"], true);
         let actions = actions();
         assert_eq!(actions.len(), 9);
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|a| a.shortcut)
+                .map(|a| a.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![actions::ADD, actions::GROUP, actions::LINK]
+        );
+        assert!(
+            actions
+                .iter()
+                .filter(|a| a.shortcut)
+                .all(|a| a.scope == ActionScope::Account)
+        );
         for decl in &actions {
-            assert_eq!(hhh_im_protocol::method::action_problem(decl), None, "{decl:?}");
+            assert_eq!(
+                hhh_im_protocol::method::action_problem(decl),
+                None,
+                "{decl:?}"
+            );
         }
         let ids: std::collections::HashSet<&str> = actions.iter().map(|a| a.id.as_str()).collect();
         assert_eq!(ids.len(), actions.len(), "编号不重复");
         // 会话菜单：私聊只有“删除会话”，群是 群成员 · 邀请成员 · 退出群 · 删除会话（一份声明，HHH 契约 v18 §4）。
         let menu = |kind| {
-            actions.iter().filter(|a| a.scope == ActionScope::Conversation && a.applies_to(kind)).map(|a| a.label.as_str()).collect::<Vec<_>>()
+            actions
+                .iter()
+                .filter(|a| a.scope == ActionScope::Conversation && a.applies_to(kind))
+                .map(|a| a.label.as_str())
+                .collect::<Vec<_>>()
         };
         assert_eq!(menu(ConversationKind::Direct), ["删除会话"]);
-        assert_eq!(menu(ConversationKind::Group), ["群成员", "邀请成员", "退出群", "删除会话"]);
+        assert_eq!(
+            menu(ConversationKind::Group),
+            ["群成员", "邀请成员", "退出群", "删除会话"]
+        );
         // 清单与握手的编号、名字一致。
-        let manifest: Value = serde_json::from_str(include_str!("../../hhh-im-provider.json")).unwrap();
+        let manifest: Value =
+            serde_json::from_str(include_str!("../../hhh-im-provider.json")).unwrap();
         assert_eq!(manifest["id"], PROVIDER_ID);
         assert_eq!(manifest["name"], PROVIDER_NAME);
-        assert_eq!(manifest["version"], env!("CARGO_PKG_VERSION"), "清单与 Cargo.toml 的版本一致");
+        assert_eq!(
+            manifest["version"],
+            env!("CARGO_PKG_VERSION"),
+            "清单与 Cargo.toml 的版本一致"
+        );
     }
 }
