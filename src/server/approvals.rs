@@ -33,8 +33,15 @@ fn code_problem(words: &str) -> Option<&'static str> {
     if JoinCode::parse(words).is_ok() {
         return None;
     }
-    let count = words.split(|c: char| c.is_whitespace() || c == '-').filter(|part| !part.is_empty()).count();
-    Some(if count == JOIN_CODE_WORDS { "和新电脑上的不一致，再看一下。" } else { "要输 4 个词，用空格隔开。" })
+    let count = words
+        .split(|c: char| c.is_whitespace() || c == '-')
+        .filter(|part| !part.is_empty())
+        .count();
+    Some(if count == JOIN_CODE_WORDS {
+        "和新电脑上的不一致，再看一下。"
+    } else {
+        "要输 4 个词，用空格隔开。"
+    })
 }
 
 /// 一个时间（毫秒）写成“今天 10:42”/“10 月 12 日 10:42”（本机时区不可知，用 UTC+8，和服务器所在一致）。
@@ -46,7 +53,11 @@ pub(crate) fn when(ms: i64) -> String {
     let today = (super::now_ms() + OFFSET).div_euclid(86_400_000);
     let (_, month, day) = civil(days);
     let clock = format!("{:02}:{:02}", minutes / 60, minutes % 60);
-    if days == today { format!("今天 {clock}") } else { format!("{month} 月 {day} 日 {clock}") }
+    if days == today {
+        format!("今天 {clock}")
+    } else {
+        format!("{month} 月 {day} 日 {clock}")
+    }
 }
 
 /// 一个时间（毫秒）在 UTC+8 的年月日。
@@ -78,24 +89,41 @@ pub(crate) fn notices_of(live: &Live) -> Vec<Notice> {
             id: format!("join-{}", info.request),
             text: format!("新{}「{}」等你批准", info.kind.label(), info.name),
             relogin: false,
-            action: Some(NoticeAction { id: format!("{APPROVE_PREFIX}{}", info.request), label: "查看".into() }),
+            action: Some(NoticeAction {
+                id: format!("{APPROVE_PREFIX}{}", info.request),
+                label: "查看".into(),
+            }),
             prompt: true,
         })
         .collect();
-    notices.extend(live.device_notes.lock().expect("电脑提醒锁中毒").iter().map(|(id, text)| Notice {
-        id: format!("device-{id}"),
-        text: text.clone(),
-        relogin: false,
-        action: Some(NoticeAction { id: super::actions::DEVICES.into(), label: "查看".into() }),
-        prompt: false,
-    }));
+    notices.extend(
+        live.device_notes
+            .lock()
+            .expect("电脑提醒锁中毒")
+            .iter()
+            .map(|(id, text)| Notice {
+                id: format!("device-{id}"),
+                text: text.clone(),
+                relogin: false,
+                action: Some(NoticeAction {
+                    id: super::actions::DEVICES.into(),
+                    label: "查看".into(),
+                }),
+                prompt: false,
+            }),
+    );
     notices
 }
 
 impl Server {
     /// 把此刻的全部提醒告诉宿主。
     pub(crate) fn send_notices(&self, live: &Live) {
-        self.peer.notify("session/notice", SessionNoticeParams { notices: notices_of(live) });
+        self.peer.notify(
+            "session/notice",
+            SessionNoticeParams {
+                notices: notices_of(live),
+            },
+        );
     }
 
     /// 上线后补上已经在等的批准请求（离线时来的）。取不到只记日志。
@@ -108,23 +136,34 @@ impl Server {
 
     pub(crate) fn requests_refreshed(&self, live: &Live, requests: Vec<JoinRequestInfo>) {
         let pending = requests.iter().map(|r| r.request.clone()).collect();
-        *live.requests.lock().expect("批准请求锁中毒") = requests.into_iter().map(|r| (r.request.to_string(), r)).collect();
+        *live.requests.lock().expect("批准请求锁中毒") = requests
+            .into_iter()
+            .map(|r| (r.request.to_string(), r))
+            .collect();
         self.send_notices(live);
-        self.flows.send_to_action(Input::Join(JoinEvent::Pending(pending)));
+        self.flows
+            .send_to_action(Input::Join(JoinEvent::Pending(pending)));
     }
 
     /// 有新电脑请求加入。
     pub(crate) fn join_requested(&self, live: &Live, info: JoinRequestInfo) {
         tracing::info!(name = %info.name, "新电脑等批准");
-        live.requests.lock().expect("批准请求锁中毒").insert(info.request.to_string(), info);
+        live.requests
+            .lock()
+            .expect("批准请求锁中毒")
+            .insert(info.request.to_string(), info);
         self.send_notices(live);
     }
 
     /// 批准请求结束：拿掉提醒，正在批准它的流程收到结果。
     pub(crate) fn join_closed(&self, live: &Live, request: RequestId, reason: JoinCloseReason) {
-        live.requests.lock().expect("批准请求锁中毒").remove(&request.to_string());
+        live.requests
+            .lock()
+            .expect("批准请求锁中毒")
+            .remove(&request.to_string());
         self.send_notices(live);
-        self.flows.send_to_action(Input::Join(JoinEvent::Closed { request, reason }));
+        self.flows
+            .send_to_action(Input::Join(JoinEvent::Closed { request, reason }));
     }
 
     /// 电脑增减（契约 S4）：记一条提醒。
@@ -140,15 +179,28 @@ impl Server {
 
     /// 看过“我的电脑”：电脑增减的提醒拿掉。
     pub(crate) fn devices_seen(&self, live: &Live) {
-        let had = !std::mem::take(&mut *live.device_notes.lock().expect("电脑提醒锁中毒")).is_empty();
+        let had =
+            !std::mem::take(&mut *live.device_notes.lock().expect("电脑提醒锁中毒")).is_empty();
         if had {
             self.send_notices(live);
         }
     }
 
     /// 批准新电脑（操作 `approve:<请求>`）。
-    pub(crate) async fn approve(self: Arc<Self>, live: Arc<Live>, ui: Ui<'_>, request: &str, mut rx: mpsc::UnboundedReceiver<Input>) {
-        let Some(info) = live.requests.lock().expect("批准请求锁中毒").get(request).cloned() else {
+    pub(crate) async fn approve(
+        self: Arc<Self>,
+        live: Arc<Live>,
+        ui: Ui<'_>,
+        request: &str,
+        mut rx: mpsc::UnboundedReceiver<Input>,
+    ) {
+        let Some(info) = live
+            .requests
+            .lock()
+            .expect("批准请求锁中毒")
+            .get(request)
+            .cloned()
+        else {
             ui.fail(Some("请求已结束"), "这次请求已经处理过或作废了。", None);
             return;
         };
@@ -162,7 +214,7 @@ impl Server {
                 "submitLabel": "批准", "cancelLabel": "拒绝", "cancelChoice": "reject",
                 "note": match &warn {
                     Some(text) => note(text, true),
-                    None => note(&format!("不是你本人在操作就点“拒绝”：批准后，那台设备能读你的全部消息。"), false),
+                    None => note("不是你本人在操作就点“拒绝”：批准后，那台设备能读你的全部消息。", false),
                 },
             }))
         };
@@ -174,7 +226,11 @@ impl Server {
                     if let Err(error) = live.client.join_reject(&info.request).await {
                         tracing::info!(%error, "拒绝新电脑没成");
                     }
-                    ui.fail(Some("已拒绝"), "那台电脑不会加入。如果不是你本人在操作，建议尽快修改 Cindy 密码。", None);
+                    ui.fail(
+                        Some("已拒绝"),
+                        "那台电脑不会加入。如果不是你本人在操作，建议尽快修改 Cindy 密码。",
+                        None,
+                    );
                     return;
                 }
                 Input::Choose { .. } => {}
@@ -189,7 +245,9 @@ impl Server {
                         tracing::info!(%error, "批准新电脑没交上去");
                         match error.code() {
                             Some(ErrorCode::Conflict) => {
-                                ui.step(input_step(Some("这次尝试正在处理，结果会自动更新。".into())));
+                                ui.step(input_step(Some(
+                                    "这次尝试正在处理，结果会自动更新。".into(),
+                                )));
                                 continue;
                             }
                             Some(ErrorCode::NotFound | ErrorCode::Expired) => {
@@ -198,16 +256,25 @@ impl Server {
                             }
                             _ => {}
                         }
-                        ui.fail(Some("请求已结束"), &format!("这次请求已经处理过或作废了（{error}）。"), None);
+                        ui.fail(
+                            Some("请求已结束"),
+                            &format!("这次请求已经处理过或作废了（{error}）。"),
+                            None,
+                        );
                         return;
                     }
                 }
                 Input::Join(JoinEvent::Retry { request, attempt }) if request == info.request => {
                     let left = (JOIN_MAX_ATTEMPTS + 1).saturating_sub(attempt);
-                    ui.step(input_step(Some(format!("和新电脑上的不一致，再看一下（还能试 {left} 次）。"))));
+                    ui.step(input_step(Some(format!(
+                        "和新电脑上的不一致，再看一下（还能试 {left} 次）。"
+                    ))));
                 }
                 Input::Join(JoinEvent::Approved { request }) if request == info.request => {
-                    ui.done(Some(&format!("已批准「{name}」")), Some("那台电脑正在补齐聊天记录。你的其它电脑也会收到提醒。"));
+                    ui.done(
+                        Some(&format!("已批准「{name}」")),
+                        Some("那台电脑正在补齐聊天记录。你的其它电脑也会收到提醒。"),
+                    );
                     return;
                 }
                 Input::Join(JoinEvent::Pending(requests)) if !requests.contains(&info.request) => {
@@ -250,8 +317,14 @@ mod tests {
     #[test]
     fn four_words_outside_the_list_read_as_a_mismatch() {
         assert_eq!(code_problem("urban fatal hour around"), None);
-        assert_eq!(code_problem("one two three four"), Some("和新电脑上的不一致，再看一下。"));
-        assert_eq!(code_problem("urban fatal hour"), Some("要输 4 个词，用空格隔开。"));
+        assert_eq!(
+            code_problem("one two three four"),
+            Some("和新电脑上的不一致，再看一下。")
+        );
+        assert_eq!(
+            code_problem("urban fatal hour"),
+            Some("要输 4 个词，用空格隔开。")
+        );
         assert_eq!(code_problem(""), Some("要输 4 个词，用空格隔开。"));
     }
 }

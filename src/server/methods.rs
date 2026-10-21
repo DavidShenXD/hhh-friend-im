@@ -13,8 +13,9 @@ use friend_im_client::core::ids::{ConvId, MsgId, Uid};
 use friend_im_client::core::message::{Content, Part};
 use friend_im_client::{ClientError, HistoryItem};
 use hhh_im_protocol::method::{
-    ActivityItem, ConversationsGetParams, ConversationsListParams, MembersParams, MessagesListParams, MessagesLookupSendParams, MessagesRecallParams,
-    MessagesSendParams, Page, PeopleGetParams, PeopleGetResult, RecentActivityParams, RecentActivityResult,
+    ActivityItem, ConversationsGetParams, ConversationsListParams, MembersParams,
+    MessagesListParams, MessagesLookupSendParams, MessagesRecallParams, MessagesSendParams, Page,
+    PeopleGetParams, PeopleGetResult, RecentActivityParams, RecentActivityResult,
 };
 use hhh_im_protocol::rpc::{ErrorKind, RpcError};
 use hhh_im_protocol::types::{Person, PersonKind, SendOutcome, SendTarget};
@@ -41,11 +42,22 @@ pub(crate) struct Sends {
 
 impl Sends {
     fn find(&self, operation: &str) -> Option<watch::Receiver<Option<SendResult>>> {
-        self.slots.lock().expect("发送记录锁中毒").iter().find(|(id, _)| id == operation).map(|(_, rx)| rx.clone())
+        self.slots
+            .lock()
+            .expect("发送记录锁中毒")
+            .iter()
+            .find(|(id, _)| id == operation)
+            .map(|(_, rx)| rx.clone())
     }
 
     /// 这次发送的结果槽；第一次见到这个编号时另外给出写结果的那一头（由调用方去发）。
-    fn slot(&self, operation: &str) -> (watch::Receiver<Option<SendResult>>, Option<watch::Sender<Option<SendResult>>>) {
+    fn slot(
+        &self,
+        operation: &str,
+    ) -> (
+        watch::Receiver<Option<SendResult>>,
+        Option<watch::Sender<Option<SendResult>>>,
+    ) {
         let mut slots = self.slots.lock().expect("发送记录锁中毒");
         if let Some(at) = slots.iter().position(|(id, _)| id == operation) {
             // 确定没发出去的（结果是错误）可以用同一个编号再发一次：宿主重试沿用操作编号。
@@ -83,7 +95,10 @@ fn msg_id(text: &str) -> Result<MsgId, RpcError> {
 fn offset_of(cursor: Option<&str>) -> Result<usize, RpcError> {
     match cursor {
         None => Ok(0),
-        Some(text) => text.strip_prefix('o').and_then(|n| n.parse().ok()).ok_or_else(|| errors::of(ErrorKind::InvalidRequest, "翻页游标不对。")),
+        Some(text) => text
+            .strip_prefix('o')
+            .and_then(|n| n.parse().ok())
+            .ok_or_else(|| errors::of(ErrorKind::InvalidRequest, "翻页游标不对。")),
     }
 }
 
@@ -98,7 +113,12 @@ fn slice<T>(all: Vec<T>, offset: usize, limit: u16) -> Page<T> {
 
 /// 消息编号：由账号与操作编号算出来（同一次发送重试还是同一个编号）。
 pub(crate) fn send_id(me: &Uid, operation: &str) -> MsgId {
-    let digest = Sha256::new().chain_update(b"friend-im/send/v1\0").chain_update(me.as_str()).chain_update(b"\0").chain_update(operation).finalize();
+    let digest = Sha256::new()
+        .chain_update(b"friend-im/send/v1\0")
+        .chain_update(me.as_str())
+        .chain_update(b"\0")
+        .chain_update(operation)
+        .finalize();
     let mut raw = [0u8; 16];
     raw.copy_from_slice(&digest[..16]);
     MsgId::from_raw(raw)
@@ -118,7 +138,10 @@ fn mime_of(name: &str, image: bool, head: &[u8]) -> String {
             return mime.into();
         }
     }
-    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
     match ext.as_str() {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
@@ -137,13 +160,24 @@ fn mime_of(name: &str, image: bool, head: &[u8]) -> String {
 
 impl Server {
     /// `conversations/list`：自己现在所在的会话，按最近有动静的排。
-    pub(crate) async fn conversations_list(&self, params: ConversationsListParams) -> Result<Value, RpcError> {
+    pub(crate) async fn conversations_list(
+        &self,
+        params: ConversationsListParams,
+    ) -> Result<Value, RpcError> {
         let live = self.live().await?;
         let offset = offset_of(params.cursor.as_deref())?;
         let summaries = live.client.convs().await.map_err(|e| errors::client(&e))?;
         // 重置过账号后退出的群不再列（契约 S7）。
-        let left = live.client.groups_left_by_reset().await.map_err(|e| errors::client(&e))?;
-        let ids: Vec<ConvId> = summaries.into_iter().filter(|s| s.member && !left.contains(&s.conv)).map(|s| s.conv).collect();
+        let left = live
+            .client
+            .groups_left_by_reset()
+            .await
+            .map_err(|e| errors::client(&e))?;
+        let ids: Vec<ConvId> = summaries
+            .into_iter()
+            .filter(|s| s.member && !left.contains(&s.conv))
+            .map(|s| s.conv)
+            .collect();
         let page = slice(ids, offset, params.limit.min(100));
         let mut items = Vec::with_capacity(page.items.len());
         for conv in &page.items {
@@ -152,30 +186,59 @@ impl Server {
                 Err(error) => tracing::info!(%conv, %error, "会话资料取不到，这次列表里先不放"),
             }
         }
-        Ok(to_value(Page { items, next: page.next }))
+        Ok(to_value(Page {
+            items,
+            next: page.next,
+        }))
     }
 
     /// `conversations/get`。
-    pub(crate) async fn conversations_get(&self, params: ConversationsGetParams) -> Result<Value, RpcError> {
+    pub(crate) async fn conversations_get(
+        &self,
+        params: ConversationsGetParams,
+    ) -> Result<Value, RpcError> {
         let live = self.live().await?;
         let conv = conv_id(&params.conversation_id)?;
-        live.conversation(&conv).await.map(to_value).map_err(|e| errors::client(&e))
+        live.conversation(&conv)
+            .await
+            .map(to_value)
+            .map_err(|e| errors::client(&e))
     }
 
     /// `conversations/members`：会话现在的成员。
-    pub(crate) async fn conversations_members(&self, params: MembersParams) -> Result<Value, RpcError> {
+    pub(crate) async fn conversations_members(
+        &self,
+        params: MembersParams,
+    ) -> Result<Value, RpcError> {
         let live = self.live().await?;
         let conv = conv_id(&params.conversation_id)?;
         let offset = offset_of(params.cursor.as_deref())?;
-        let info = live.client.conv_info(&conv).await.map_err(|e| errors::client(&e))?;
-        let page = slice(info.members.into_iter().map(|m| m.uid).collect(), offset, params.limit);
+        let info = live
+            .client
+            .conv_info(&conv)
+            .await
+            .map_err(|e| errors::client(&e))?;
+        let page = slice(
+            info.members.into_iter().map(|m| m.uid).collect(),
+            offset,
+            params.limit,
+        );
         let names = live.names(page.items.iter().cloned()).await;
         let items: Vec<Person> = page
             .items
             .iter()
-            .map(|u| Person { id: u.to_string(), id_type: None, kind: PersonKind::User, name: names.get(u).cloned(), avatar: live.avatar_of(u) })
+            .map(|u| Person {
+                id: u.to_string(),
+                id_type: None,
+                kind: PersonKind::User,
+                name: names.get(u).cloned(),
+                avatar: live.avatar_of(u),
+            })
             .collect();
-        Ok(to_value(Page { items, next: page.next }))
+        Ok(to_value(Page {
+            items,
+            next: page.next,
+        }))
     }
 
     /// `people/get`：账号的名字。编号格式不对、服务器上没有的放进 `missing`。
@@ -189,23 +252,47 @@ impl Server {
                 Err(_) => missing.push(id.clone()),
             }
         }
-        let profiles = live.client.profiles(&uids).await.map_err(|e| errors::client(&e))?;
+        let profiles = live
+            .client
+            .profiles(&uids)
+            .await
+            .map_err(|e| errors::client(&e))?;
         let found: Vec<Person> = profiles
             .iter()
-            .map(|p| Person { id: p.uid.to_string(), id_type: None, kind: PersonKind::User, name: Some(p.name.clone()), avatar: live.avatar_of(&p.uid) })
+            .map(|p| Person {
+                id: p.uid.to_string(),
+                id_type: None,
+                kind: PersonKind::User,
+                name: Some(p.name.clone()),
+                avatar: live.avatar_of(&p.uid),
+            })
             .collect();
-        missing.extend(uids.iter().filter(|u| !profiles.iter().any(|p| &p.uid == *u)).map(ToString::to_string));
+        missing.extend(
+            uids.iter()
+                .filter(|u| !profiles.iter().any(|p| &p.uid == *u))
+                .map(ToString::to_string),
+        );
         Ok(to_value(PeopleGetResult { found, missing }))
     }
 
     /// `conversations/recentActivity`：服务器一次给全（至多 1000 个会话），只有编号与时间。
-    pub(crate) async fn conversations_recent_activity(&self, params: RecentActivityParams) -> Result<Value, RpcError> {
+    pub(crate) async fn conversations_recent_activity(
+        &self,
+        params: RecentActivityParams,
+    ) -> Result<Value, RpcError> {
         let live = self.live().await?;
-        let activity = live.client.activity(params.since_ms).await.map_err(|e| errors::client(&e))?;
+        let activity = live
+            .client
+            .activity(params.since_ms)
+            .await
+            .map_err(|e| errors::client(&e))?;
         let mut items = Vec::with_capacity(activity.len());
         for item in activity {
-            let Ok(conversation) = live.conversation(&item.conv).await else { continue };
+            let Ok(conversation) = live.conversation(&item.conv).await else {
+                continue;
+            };
             items.push(ActivityItem {
+                conversation: None,
                 conversation_id: item.conv.to_string(),
                 kind: conversation.kind,
                 first_ms: item.first_ms,
@@ -213,34 +300,60 @@ impl Server {
                 peer_id: conversation.peer,
             });
         }
-        Ok(to_value(RecentActivityResult { items, complete: true }))
+        Ok(to_value(RecentActivityResult {
+            items,
+            complete: true,
+        }))
     }
 
     /// `messages/list`：从新往旧翻一页，页里按从旧到新排。
-    pub(crate) async fn messages_list(&self, params: MessagesListParams) -> Result<Value, RpcError> {
+    pub(crate) async fn messages_list(
+        &self,
+        params: MessagesListParams,
+    ) -> Result<Value, RpcError> {
         let live = self.live().await?;
         let conv = conv_id(&params.conversation_id)?;
         if params.thread_id.is_some() {
-            return Ok(to_value(Page::<()> { items: Vec::new(), next: None }));
+            return Ok(to_value(Page::<()> {
+                items: Vec::new(),
+                next: None,
+            }));
         }
         if !params.newest_first {
-            return Err(errors::of(ErrorKind::Unsupported, "Cindy IM 只能从新往旧翻历史。"));
+            return Err(errors::of(
+                ErrorKind::Unsupported,
+                "Cindy IM 只能从新往旧翻历史。",
+            ));
         }
         let before = match params.cursor.as_deref() {
             None => None,
-            Some(text) => Some(translate::parse_cursor(text).ok_or_else(|| errors::of(ErrorKind::InvalidRequest, "翻页游标不对。"))?),
+            Some(text) => Some(
+                translate::parse_cursor(text)
+                    .ok_or_else(|| errors::of(ErrorKind::InvalidRequest, "翻页游标不对。"))?,
+            ),
         };
         let limit = usize::from(params.limit.max(1)).min(translate_page_max());
         let page = live
             .client
-            .history_in(&conv, before, limit as u32, params.after_ms, params.before_ms)
+            .history_in(
+                &conv,
+                before,
+                limit as u32,
+                params.after_ms,
+                params.before_ms,
+            )
             .await
             .map_err(|e| errors::client(&e))?;
-        Ok(to_value(history_page(&live, &conv, page.items, page.more, limit).await))
+        Ok(to_value(
+            history_page(&live, &conv, page.items, page.more, limit).await,
+        ))
     }
 
     /// `messages/send`：同一个操作编号只发一次；60 秒内没发完先回“不确定”。
-    pub(crate) async fn messages_send(self: &Arc<Self>, params: MessagesSendParams) -> Result<Value, RpcError> {
+    pub(crate) async fn messages_send(
+        self: &Arc<Self>,
+        params: MessagesSendParams,
+    ) -> Result<Value, RpcError> {
         let (mut rx, tx) = self.sends.slot(&params.operation_id);
         if let Some(tx) = tx {
             let server = self.clone();
@@ -253,18 +366,31 @@ impl Server {
     }
 
     /// `messages/lookupSend`：这次发送的结果（还在发就再等一会儿）。
-    pub(crate) async fn messages_lookup_send(&self, params: MessagesLookupSendParams) -> Result<Value, RpcError> {
+    pub(crate) async fn messages_lookup_send(
+        &self,
+        params: MessagesLookupSendParams,
+    ) -> Result<Value, RpcError> {
         let Some(mut rx) = self.sends.find(&params.operation_id) else {
-            return Err(errors::of(ErrorKind::NotFound, "没有这次发送的记录（插件重启过）。"));
+            return Err(errors::of(
+                ErrorKind::NotFound,
+                "没有这次发送的记录（插件重启过）。",
+            ));
         };
         self.wait_send(&mut rx).await
     }
 
-    async fn wait_send(&self, rx: &mut watch::Receiver<Option<SendResult>>) -> Result<Value, RpcError> {
+    async fn wait_send(
+        &self,
+        rx: &mut watch::Receiver<Option<SendResult>>,
+    ) -> Result<Value, RpcError> {
         match tokio::time::timeout(self.options.send_wait, rx.wait_for(Option::is_some)).await {
             Ok(Ok(result)) => result.clone().expect("等到的结果一定有值"),
-            Ok(Err(_)) => Ok(to_value(SendOutcome::Unknown { reason: "发送中途插件出了问题，不知道发出去没有。".into() })),
-            Err(_) => Ok(to_value(SendOutcome::Unknown { reason: "附件还在上传，发完后在发送记录里能看到结果。".into() })),
+            Ok(Err(_)) => Ok(to_value(SendOutcome::Unknown {
+                reason: "发送中途插件出了问题，不知道发出去没有。".into(),
+            })),
+            Err(_) => Ok(to_value(SendOutcome::Unknown {
+                reason: "附件还在上传，发完后在发送记录里能看到结果。".into(),
+            })),
         }
     }
 
@@ -273,9 +399,14 @@ impl Server {
         let live = self.live().await?;
         let (conv, reply_to) = match &params.target {
             SendTarget::Conversation { conversation_id } => (conv_id(conversation_id)?, None),
-            SendTarget::Reply { conversation_id, message_id, .. } => (conv_id(conversation_id)?, Some(msg_id(message_id)?)),
+            SendTarget::Reply {
+                conversation_id,
+                message_id,
+                ..
+            } => (conv_id(conversation_id)?, Some(msg_id(message_id)?)),
         };
-        let pieces = translate::pieces(&params.content).map_err(|m| errors::of(ErrorKind::InvalidRequest, m))?;
+        let pieces = translate::pieces(&params.content)
+            .map_err(|m| errors::of(ErrorKind::InvalidRequest, m))?;
         if pieces.is_empty() {
             return Err(errors::of(ErrorKind::InvalidRequest, "消息是空的。"));
         }
@@ -290,7 +421,10 @@ impl Server {
                 }
             }
         }
-        let content = Content::Post { parts: parts.clone(), reply_to: reply_to.clone() };
+        let content = Content::Post {
+            parts: parts.clone(),
+            reply_to: reply_to.clone(),
+        };
         let id = send_id(&live.me, &params.operation_id);
         let sent = {
             let _turn = self.sends.gate.lock().await;
@@ -306,7 +440,9 @@ impl Server {
             Ok(sent) => sent,
             Err(error @ (ClientError::Disconnected | ClientError::Timeout)) => {
                 tracing::info!(%conv, %error, "发送时没连上服务器，不知道发出去没有");
-                return Ok(to_value(SendOutcome::Unknown { reason: "没连上 Cindy IM 服务器，不知道发出去没有。".into() }));
+                return Ok(to_value(SendOutcome::Unknown {
+                    reason: "没连上 Cindy IM 服务器，不知道发出去没有。".into(),
+                }));
             }
             Err(error) => {
                 tracing::info!(%conv, %error, "发送被拒");
@@ -322,25 +458,49 @@ impl Server {
             _ => None,
         }));
         let names = live.names(uids).await;
-        let message = translate::posted(conv.as_str(), &id, &live.me, ts_ms, &parts, reply_to.as_ref(), &names);
+        let message = translate::posted(
+            conv.as_str(),
+            &id,
+            &live.me,
+            ts_ms,
+            &parts,
+            reply_to.as_ref(),
+            &names,
+        );
         live.remember(&message.id, &live.me, ts_ms);
-        Ok(to_value(SendOutcome::Accepted { message: Box::new(message) }))
+        Ok(to_value(SendOutcome::Accepted {
+            message: Box::new(message),
+        }))
     }
 
     /// 暂存的附件：读宽高（图片），加密上传到这个会话，换成消息正文里的一段。
-    async fn upload_attachment(&self, live: &Live, conv: &ConvId, key: &str, image: bool) -> Result<Part, RpcError> {
-        let attachment = self.uploads.attachment(key).await.ok_or_else(|| errors::of(ErrorKind::NotFound, "附件已经过期，要重新上传。"))?;
+    async fn upload_attachment(
+        &self,
+        live: &Live,
+        conv: &ConvId,
+        key: &str,
+        image: bool,
+    ) -> Result<Part, RpcError> {
+        let attachment = self
+            .uploads
+            .attachment(key)
+            .await
+            .ok_or_else(|| errors::of(ErrorKind::NotFound, "附件已经过期，要重新上传。"))?;
         let path = attachment.path.clone();
         let read_head = move || {
             use std::io::Read as _;
             let mut head = vec![0u8; 64 * 1024];
-            let n = std::fs::File::open(&path).and_then(|mut f| f.read(&mut head)).unwrap_or(0);
+            let n = std::fs::File::open(&path)
+                .and_then(|mut f| f.read(&mut head))
+                .unwrap_or(0);
             head.truncate(n);
             let size = imagesize::size(&path).ok();
             (head, size)
         };
         #[cfg(not(target_os = "wasi"))]
-        let (head, size) = tokio::task::spawn_blocking(read_head).await.unwrap_or_default();
+        let (head, size) = tokio::task::spawn_blocking(read_head)
+            .await
+            .unwrap_or_default();
         // WASI 构建没有后台线程：就地读（只读文件头）。
         #[cfg(target_os = "wasi")]
         let (head, size) = read_head();
@@ -350,27 +510,41 @@ impl Server {
             tracing::error!(%error, "打不开暂存的附件");
             errors::of(ErrorKind::NotFound, "附件已经过期，要重新上传。")
         })?;
-        let uploaded = live.client.upload(conv, file, attachment.bytes, &attachment.name, &mime).await.map_err(|error| {
-            tracing::info!(%conv, %error, "附件上传没成");
-            errors::client(&error)
-        })?;
+        let uploaded = live
+            .client
+            .upload(conv, file, attachment.bytes, &attachment.name, &mime)
+            .await
+            .map_err(|error| {
+                tracing::info!(%conv, %error, "附件上传没成");
+                errors::client(&error)
+            })?;
         Ok(if image {
-            Part::Image { file: uploaded, width: size.map(|s| s.width as u32), height: size.map(|s| s.height as u32) }
+            Part::Image {
+                file: uploaded,
+                width: size.map(|s| s.width as u32),
+                height: size.map(|s| s.height as u32),
+            }
         } else {
             Part::File { file: uploaded }
         })
     }
 
     /// `messages/recall`：撤回自己的一条（服务器上的密文随之删除）。
-    pub(crate) async fn messages_recall(&self, params: MessagesRecallParams) -> Result<Value, RpcError> {
+    pub(crate) async fn messages_recall(
+        &self,
+        params: MessagesRecallParams,
+    ) -> Result<Value, RpcError> {
         let live = self.live().await?;
         let conv = conv_id(&params.conversation_id)?;
         let target = msg_id(&params.message_id)?;
         let _turn = self.sends.gate.lock().await;
-        live.client.recall(&conv, &MsgId::random(), &target).await.map_err(|error| {
-            tracing::info!(%conv, %error, "撤回没成");
-            errors::client(&error)
-        })?;
+        live.client
+            .recall(&conv, &MsgId::random(), &target)
+            .await
+            .map_err(|error| {
+                tracing::info!(%conv, %error, "撤回没成");
+                errors::client(&error)
+            })?;
         Ok(serde_json::json!({}))
     }
 }
@@ -381,7 +555,13 @@ fn translate_page_max() -> usize {
 
 /// 一页历史（客户端库给的，从新到旧）→ 协议的一页（从旧到新）。消息与系统提示合起来不超过 `limit` 条：
 /// 多出来的（更早的）留给下一页，游标停在留下的最早一条。撤回动作本身、不用给人看的提示不占条数。
-pub(crate) async fn history_page(live: &Live, conv: &ConvId, items: Vec<HistoryItem>, more: bool, limit: usize) -> Page<hhh_im_protocol::types::Message> {
+pub(crate) async fn history_page(
+    live: &Live,
+    conv: &ConvId,
+    items: Vec<HistoryItem>,
+    more: bool,
+    limit: usize,
+) -> Page<hhh_im_protocol::types::Message> {
     let mut uids = Vec::new();
     for item in &items {
         match item {
@@ -403,7 +583,15 @@ pub(crate) async fn history_page(live: &Live, conv: &ConvId, items: Vec<HistoryI
         }
         let wire = match item {
             HistoryItem::Message(m) => translate::message(m, &names),
-            HistoryItem::Rejected { id, ts_ms, sender, .. } => Some(translate::unreadable(conv.as_str(), id, sender, *ts_ms, &names)),
+            HistoryItem::Rejected {
+                id, ts_ms, sender, ..
+            } => Some(translate::unreadable(
+                conv.as_str(),
+                id,
+                sender,
+                *ts_ms,
+                &names,
+            )),
             HistoryItem::Notice(n) => translate::notice(n, &names, &live.me),
         };
         if let Some(wire) = wire {
@@ -418,11 +606,12 @@ pub(crate) async fn history_page(live: &Live, conv: &ConvId, items: Vec<HistoryI
         }
         oldest = Some(item.log());
     }
-    let next = (truncated || more).then(|| oldest.map(translate::cursor)).flatten();
+    let next = (truncated || more)
+        .then(|| oldest.map(translate::cursor))
+        .flatten();
     kept.reverse();
     Page { items: kept, next }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -433,21 +622,31 @@ mod tests {
         let me = Uid::from_raw([1; 16]);
         assert_eq!(send_id(&me, "op-1"), send_id(&me, "op-1"));
         assert_ne!(send_id(&me, "op-1"), send_id(&me, "op-2"));
-        assert_ne!(send_id(&me, "op-1"), send_id(&Uid::from_raw([2; 16]), "op-1"));
+        assert_ne!(
+            send_id(&me, "op-1"),
+            send_id(&Uid::from_raw([2; 16]), "op-1")
+        );
     }
 
     #[test]
     fn offset_pages_and_cursors() {
         let page = slice((0..5).collect::<Vec<_>>(), 0, 2);
         assert_eq!((page.items, page.next.as_deref()), (vec![0, 1], Some("o2")));
-        let page = slice((0..5).collect::<Vec<_>>(), offset_of(Some("o4")).unwrap(), 2);
+        let page = slice(
+            (0..5).collect::<Vec<_>>(),
+            offset_of(Some("o4")).unwrap(),
+            2,
+        );
         assert_eq!((page.items, page.next), (vec![4], None));
         assert!(offset_of(Some("x")).is_err());
     }
 
     #[test]
     fn mime_types_from_content_or_name() {
-        let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R', 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0];
+        let png = [
+            0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R', 0,
+            0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0,
+        ];
         assert_eq!(mime_of("x.bin", true, &png), "image/png");
         assert_eq!(mime_of("报告.PDF", false, &[]), "application/pdf");
         assert_eq!(mime_of("无后缀", false, &[]), "application/octet-stream");
