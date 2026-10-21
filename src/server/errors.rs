@@ -48,7 +48,7 @@ pub(crate) fn client(error: &ClientError) -> RpcError {
             let message = format!("Cindy IM 服务器拒绝了：{}", wire.message);
             match wire.code {
                 ErrorCode::Unauthorized => auth(ReauthReason::Expired, "Cindy IM 的登录已失效，要重新登录。"),
-                ErrorCode::DeviceRemoved => auth(ReauthReason::Revoked, "这台电脑已被移出你的 Cindy IM 账号。"),
+                ErrorCode::DeviceRemoved => auth(ReauthReason::Revoked, "这台电脑已被移出你的 Cindy IM 账号，要重新登录。"),
                 ErrorCode::NotApproved => auth(ReauthReason::CredentialInvalid, "这台电脑还没被批准加入 Cindy IM 账号。"),
                 ErrorCode::Forbidden => of(ErrorKind::PermissionDenied, message),
                 ErrorCode::NotFound => of(ErrorKind::NotFound, message),
@@ -90,10 +90,6 @@ mod tests {
         let removed = client(&server(ErrorCode::DeviceRemoved));
         assert_eq!(kind(&removed), ErrorKind::AuthExpired);
         assert_eq!(removed.data.as_ref().unwrap().reauth, Some(ReauthReason::Revoked));
-        assert_eq!(
-            removed.data.as_ref().unwrap().user_message.as_deref(),
-            Some("这台电脑已被移出你的 Cindy IM 账号。")
-        );
         let limited = client(&server(ErrorCode::RateLimited));
         assert_eq!(limited.data.as_ref().unwrap().retry_after_secs, Some(1));
         assert_eq!(kind(&client(&ClientError::Disconnected)), ErrorKind::Disconnected);

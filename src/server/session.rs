@@ -253,7 +253,7 @@ impl Server {
             Err(error) => {
                 return match error.code() {
                     Some(ErrorCode::Unauthorized) => needs_login(NeedsLoginReason::Expired, "Cindy IM 的登录已失效，要重新登录。"),
-                    Some(ErrorCode::DeviceRemoved) => needs_login(NeedsLoginReason::Revoked, "这台电脑已被移出你的 Cindy IM 账号。"),
+                    Some(ErrorCode::DeviceRemoved) => needs_login(NeedsLoginReason::Revoked, "这台电脑已被移出你的 Cindy IM 账号，要重新登录。"),
                     Some(ErrorCode::NotApproved) => needs_login(NeedsLoginReason::CredentialInvalid, "这台电脑还没被批准加入 Cindy IM 账号。"),
                     _ => {
                         tracing::info!(%error, "连不上服务器");

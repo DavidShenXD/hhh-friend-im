@@ -138,7 +138,7 @@ async fn translate_updates(server: Arc<Server>, live: Arc<Live>, mut updates: Up
             }
             Update::CredentialsChanged => save_credentials(&server, &live).await,
             Update::DeviceRemoved => {
-                expire(&server, ReauthReason::Revoked, "这台电脑已被移出你的 Cindy IM 账号。").await;
+                expire(&server, ReauthReason::Revoked, "这台电脑已被移出你的 Cindy IM 账号，要重新登录。").await;
                 return;
             }
             Update::LoggedOut => {
