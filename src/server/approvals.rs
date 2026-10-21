@@ -157,7 +157,7 @@ impl Server {
         let input_step = |warn: Option<String>| {
             compact(json!({
                 "kind": "input",
-                "caption": format!("新{device_word}「{name}」想登录你的 Friend-IM 账号（{}）。如果是你本人在操作，输入那台设备上显示的 4 个词。", when(info.created_ms)),
+                "caption": format!("新{device_word}「{name}」想登录你的 Cindy IM 账号（{}）。如果是你本人在操作，输入那台设备上显示的 4 个词。", when(info.created_ms)),
                 "fields": [{ "id": "words", "label": "新设备上的 4 个词", "secret": false, "placeholder": "用空格隔开" }],
                 "submitLabel": "批准", "cancelLabel": "拒绝", "cancelChoice": "reject",
                 "note": match &warn {

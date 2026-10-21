@@ -80,7 +80,7 @@ pub(crate) fn now_ms() -> i64 {
 pub async fn run_stdio() {
     let (server, writes) = Server::new(Options::default());
     log::install(server.peer.sender());
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "Friend-IM 插件已启动");
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "Cindy IM 插件已启动");
     #[cfg(not(target_os = "wasi"))]
     serve_with(server, tokio::io::stdin(), tokio::io::stdout(), writes).await;
     #[cfg(target_os = "wasi")]
@@ -127,7 +127,7 @@ where
         handle.abort();
     }
     server.close_session().await;
-    tracing::info!("宿主关了标准输入，Friend-IM 插件退出");
+    tracing::info!("宿主关了标准输入，Cindy IM 插件退出");
 }
 
 /// 写手：一条一行写到输出，每条都立刻送出去。

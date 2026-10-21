@@ -1,7 +1,7 @@
 //! 用 Cindy 账号登录（provider-protocol v13 §3.1，契约 S1、S2、S3、S7、S18、S20–S23）：宿主在 `login/start` 里给 Cindy 令牌与
 //! 账号，插件生成这台电脑的钥匙、用令牌连服务器，然后按账号的情况走：
 //!
-//! - 账号还没开通（第一台电脑）：开通 → 存凭据 → 出示恢复密钥（不能跳过）→ 完成（“Friend-IM 已开通”）。先存再出示：开通后
+//! - 账号还没开通（第一台电脑）：开通 → 存凭据 → 出示恢复密钥（不能跳过）→ 完成（“Cindy IM 已开通”）。先存再出示：开通后
 //!   这台电脑已在账号里，即使没点完成也不会留下一个没人能进的账号；恢复密钥之后在“我的电脑”里能重新生成。
 //! - 开通过、这台是新电脑：出示 4 个词等旧电脑批准，说明里写具体去哪台（服务器随请求交回已登录的电脑，契约 v3）；
 //!   一台都不在线时先说清楚、恢复密钥放主按钮。可改用恢复密钥，或都没有了只能重置。批准、加入、重置完成后存凭据、
@@ -29,7 +29,7 @@ use crate::credential::Credential;
 pub(crate) const HOST_METHOD: &str = "cindy";
 
 /// 出示 4 个词时的老说法：服务器没给已登录电脑的名单（旧服务器，契约 v3 S2g）。
-const PLAIN_CAPTION: &str = "这个账号已经在别的电脑上用过。到一台已登录 Friend-IM 的电脑上，在弹出的“批准新电脑”里输入下面 4 个词：";
+const PLAIN_CAPTION: &str = "这个账号已经在别的电脑上用过。到一台已登录 Cindy IM 的电脑上，在弹出的“批准新电脑”里输入下面 4 个词：";
 
 /// 一台都不在线时至多列几台（契约 v3 S2f），多出来的写一行“还有 N 台”。
 const OFFLINE_SHOWN_MAX: usize = 5;
@@ -151,21 +151,21 @@ impl Server {
     /// `login/start`：只认“用 Cindy 账号登录”；开一个登录流程，先回流程编号再推第一步（回 `None`：已经回过了）。
     pub(crate) fn login_start(self: &Arc<Self>, id: &RpcId, params: LoginStartParams) -> Option<Result<serde_json::Value, RpcError>> {
         if params.method.as_deref().is_some_and(|m| m != HOST_METHOD) {
-            return Some(Err(errors::of(ErrorKind::InvalidRequest, "Friend-IM 只能用 Cindy 账号登录。")));
+            return Some(Err(errors::of(ErrorKind::InvalidRequest, "Cindy IM 只能用 Cindy 账号登录。")));
         }
         let token = params.values.get(login_value::HOST_TOKEN).cloned().filter(|t| !t.is_empty());
         let (flow_id, rx) = self.flows.begin(Kind::Login);
         let result = LoginStartResult { flow_id: flow_id.clone() };
         self.peer.respond(id.clone(), Ok(serde_json::to_value(result).expect("结果总能写成 JSON")));
         let (Some(token), Some(account)) = (token, params.host_account) else {
-            // 宿主没给令牌（游客，或不是官方签名的 Friend-IM）：这次登录当场失败。
+            // 宿主没给令牌（游客，或不是官方签名的 Cindy IM）：这次登录当场失败。
             tracing::warn!("开始登录时宿主没给 Cindy 令牌或账号");
             let ui = Ui { peer: &self.peer, flow_id: flow_id.clone(), kind: Kind::Login };
-            ui.fail(Some("没能登录"), "先登录 Cindy：Friend-IM 用 Friend 现在登录的 Cindy 账号登录。", None);
+            ui.fail(Some("没能登录"), "先登录 Cindy：Cindy IM 用 Friend 现在登录的 Cindy 账号登录。", None);
             self.flows.end(&flow_id);
             return None;
         };
-        tracing::info!(token_chars = token.len(), "用 Cindy 账号登录 Friend-IM");
+        tracing::info!(token_chars = token.len(), "用 Cindy 账号登录 Cindy IM");
         let start = Start { token, account, server: self.server_url() };
         let (server, id) = (self.clone(), flow_id.clone());
         tokio::spawn(async move {
@@ -177,15 +177,15 @@ impl Server {
     }
 
     async fn run_login(self: Arc<Self>, ui: &Ui<'_>, start: Start, mut rx: mpsc::UnboundedReceiver<Input>) {
-        ui.step(waiting("正在连接 Friend-IM…"));
+        ui.step(waiting("正在连接 Cindy IM…"));
         let name = device_name(&start.account.name);
         let kind = device_kind();
         let config = Config { server: start.server.clone(), device_name: name.clone() };
         let (client, mut updates) = match Client::connect(config, Credentials::generate(), Some(start.token), None).await {
             Ok(connected) => connected,
             Err(error) => {
-                tracing::info!(%error, "用 Cindy 账号连 Friend-IM 服务器没成");
-                ui.fail(Some("没能登录"), &format!("连不上 Friend-IM 服务器：{error}"), Some("再试一次"));
+                tracing::info!(%error, "用 Cindy 账号连 Cindy IM 服务器没成");
+                ui.fail(Some("没能登录"), &format!("连不上 Cindy IM 服务器：{error}"), Some("再试一次"));
                 return;
             }
         };
@@ -218,7 +218,7 @@ impl Server {
             "login/finished",
             compact(json!({ "flowId": ui.flow_id, "account": account, "title": title, "message": message })),
         );
-        tracing::info!("Friend-IM 登录完成");
+        tracing::info!("Cindy IM 登录完成");
     }
 
     /// 第一台电脑：开通、存凭据、出示恢复密钥。
@@ -234,7 +234,7 @@ impl Server {
             Ok(key) => key,
             Err(error) => {
                 tracing::info!(%error, "开通没成");
-                ui.fail(Some("没能开通"), &format!("开通 Friend-IM 没成：{error}"), Some("再试一次"));
+                ui.fail(Some("没能开通"), &format!("开通 Cindy IM 没成：{error}"), Some("再试一次"));
                 return None;
             }
         };
@@ -244,12 +244,12 @@ impl Server {
             return None;
         }
         ui.step(recovery_key(
-            "Friend-IM 已开通。这是你的恢复密钥：所有电脑都丢了时，只有它能找回聊天记录。它只显示这一次，请抄在纸上，或存进密码管理器。",
+            "Cindy IM 已开通。这是你的恢复密钥：所有电脑都丢了时，只有它能找回聊天记录。它只显示这一次，请抄在纸上，或存进密码管理器。",
             &key.to_words(),
         ));
         // 宿主关掉、断了也往下走：凭据已经存好。
         wait_confirm(rx).await;
-        Some((credential, Some(("Friend-IM 已开通", "以后在别的电脑上登录同一个 Cindy 账号，用这台电脑批准，就能看到全部聊天记录。"))))
+        Some((credential, Some(("Cindy IM 已开通", "以后在别的电脑上登录同一个 Cindy 账号，用这台电脑批准，就能看到全部聊天记录。"))))
     }
 
     /// 新电脑：等旧电脑批准，或改用恢复密钥，或重置。`name` 是这台电脑的名字。
@@ -322,7 +322,7 @@ impl Server {
                             },
                             update = updates.recv() => match update {
                                 None => {
-                                    ui.fail(Some("没能登录"), "和 Friend-IM 服务器断开了。", Some("重新请求"));
+                                    ui.fail(Some("没能登录"), "和 Cindy IM 服务器断开了。", Some("重新请求"));
                                     return None;
                                 }
                                 Some(Update::JoinWrongCode { .. }) => {
@@ -462,7 +462,7 @@ pub(crate) fn login_methods() -> Vec<hhh_im_protocol::method::LoginMethod> {
         id: HOST_METHOD.into(),
         kind: LoginKind::Host,
         label: "用 Cindy 账号登录".into(),
-        note: "用 Friend 现在登录的 Cindy 账号登录 Friend-IM，不用注册，也不要邀请码。".into(),
+        note: "用 Friend 现在登录的 Cindy 账号登录 Cindy IM，不用注册，也不要邀请码。".into(),
         placeholder: None,
         default_value: None,
         id_label: None,
@@ -494,7 +494,7 @@ mod tests {
             waiting("正在开通…"),
             compact(json!({
                 "kind": "showText", "layout": "code", "text": "orbit maple tunnel crisp", "cancelLabel": "取消",
-                "caption": "到一台已登录 Friend-IM 的电脑上输入下面 4 个词：", "waiting": "等待批准…（10 分钟内有效）", "note": null,
+                "caption": "到一台已登录 Cindy IM 的电脑上输入下面 4 个词：", "waiting": "等待批准…（10 分钟内有效）", "note": null,
                 "links": [link("useKey", "改用恢复密钥"), link("lost", "旧电脑和恢复密钥都没有了")],
             })),
             compact(json!({

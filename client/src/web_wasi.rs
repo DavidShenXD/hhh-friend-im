@@ -1,5 +1,5 @@
 //! WASI 构建（wasm32-wasip2）的 HTTP 客户端：reqwest 在 wasm32 上只有浏览器版本（靠 JS 的 fetch），WASI 里用不了，
-//! 这里只实现 Friend-IM 用到的那一小部分 reqwest 接口，名字与用法相同，调用处不分平台：
+//! 这里只实现 Cindy IM 用到的那一小部分 reqwest 接口，名字与用法相同，调用处不分平台：
 //! `GET` / `PUT` / `HEAD`、请求头、请求体、连接超时与整体超时、不跟随跳转、读状态与响应头、按块读或一次读完响应体。
 //!
 //! 底层是 hyper（HTTP/1.1）跑在 tokio 网络上，https 用 rustls（ring，webpki 根证书），和 websocket 共用同一个事件循环。
