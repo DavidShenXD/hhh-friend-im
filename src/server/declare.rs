@@ -22,10 +22,10 @@ use super::{actions, errors, login};
 /// 插件编号（同清单 `id`）。
 pub(crate) const PROVIDER_ID: &str = "friend-im";
 /// 给用户看的名字（同清单 `name`）。
-pub(crate) const PROVIDER_NAME: &str = "Friend-IM";
+pub(crate) const PROVIDER_NAME: &str = "Cindy IM";
 /// 设置项：服务器地址。
 pub(crate) const SETTING_SERVER: &str = "serverUrl";
-/// 服务器地址的默认值：Friend-IM 的官方服务器（契约 §8：服务器地址是插件的设置项，默认填官方的那台）。
+/// 服务器地址的默认值：Cindy IM 的官方服务器（契约 §8：服务器地址是插件的设置项，默认填官方的那台）。
 pub(crate) const DEFAULT_SERVER: &str = "https://hhh-friend-im.magiclizi.com";
 /// 一页最多几条（同服务器的上限）。
 pub(crate) const PAGE_MAX: u32 = limits::HISTORY_PAGE_MAX;
@@ -99,7 +99,7 @@ pub(crate) fn settings() -> Vec<SettingDecl> {
         required: true,
         // 同 `credential::server_url`：https 网址本身；本机测试可以是 http://127.0.0.1 或 http://localhost。
         pattern: Some(r"^\s*(https://[^\s/?#@]+|http://(127\.0\.0\.1|localhost)(:[0-9]+)?)/?\s*$".into()),
-        help: Some("你的 Friend-IM 服务器（https 网址）。换了服务器要重新登录。".into()),
+        help: Some("你的 Cindy IM 服务器（https 网址）。换了服务器要重新登录。".into()),
         field_type: Some("text".into()),
         default: Some(DEFAULT_SERVER.into()),
         ..Default::default()
@@ -150,7 +150,7 @@ pub(crate) fn result() -> InitializeResult {
 /// `initialize`：宿主列出的版本里要有 1。
 pub(crate) fn initialize(params: &InitializeParams) -> Result<Value, RpcError> {
     if !params.protocol_versions.contains(&1) {
-        return Err(errors::of(ErrorKind::Unsupported, "Friend-IM 插件只会协议第 1 版，和这个 HHH 不兼容。"));
+        return Err(errors::of(ErrorKind::Unsupported, "Cindy IM 插件只会协议第 1 版，和这个 HHH 不兼容。"));
     }
     Ok(serde_json::to_value(result()).expect("握手结果总能写成 JSON"))
 }

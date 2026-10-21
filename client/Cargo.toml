@@ -4,7 +4,7 @@ version = "0.3.0"
 edition = "2024"
 publish = false
 license = "MIT"
-description = "Friend-IM 客户端库：连服务器、核对签名链、钥匙缓存、同步与断线重连。不认识 HHH 协议。"
+description = "Cindy IM 客户端库：连服务器、核对签名链、钥匙缓存、同步与断线重连。不认识 HHH 协议。"
 
 [dependencies]
 friend-im-core = { path = "../core" }

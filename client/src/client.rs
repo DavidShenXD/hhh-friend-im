@@ -68,7 +68,7 @@ impl Inner {
     }
 }
 
-/// Friend-IM 客户端。克隆后共享同一条连接和状态。
+/// Cindy IM 客户端。克隆后共享同一条连接和状态。
 #[derive(Clone)]
 pub struct Client {
     pub(crate) inner: Arc<Inner>,
