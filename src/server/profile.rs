@@ -6,8 +6,8 @@
 //!   `people` 事件告诉宿主这个人的头像键；之后人名、成员、私聊会话都带上它。
 //! - **头像键**就是头像地址（不超过 [`AVATAR_KEY_MAX`] 字节）。宿主来读（`avatars/read`）时插件按地址取：只取 https、主机在
 //!   允许的名单里、至多 [`AVATAR_MAX_BYTES`]、只收 PNG / JPEG / WebP / GIF，内存里留最近 [`AVATAR_CACHE_MAX`] 张、合计不超过
-//!   [`AVATAR_CACHE_MAX_BYTES`]。名单：取样前
-//!   先认自己头像地址的主机（Cindy 给的，可信），好友不能借个人资料让插件去连任意网站。
+//!   [`AVATAR_CACHE_MAX_BYTES`]。名单：Cindy 两个区域的域名（[`CINDY_AVATAR_DOMAINS`]，含子域名、只走默认端口），再加上
+//!   自己头像地址的主机（Cindy 给的，可信）；自己没有头像时照样能看好友的头像。好友不能借个人资料让插件去连任意网站。
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -42,6 +42,9 @@ pub(crate) const ANNOUNCE_GAP: Duration = Duration::from_millis(250);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 /// 读头像一段至多多少（协议上限）。
 const SEGMENT_MAX: u64 = 1024 * 1024;
+/// Cindy 头像所在的域名（中国区、国际区）：头像在它们或它们的子域名上（实测中国区是 `hotfix.cindy.com.cn`）。
+/// 两个区的人连同一个 Cindy IM 服务器、可以互加好友，所以两个都认。
+pub(crate) const CINDY_AVATAR_DOMAINS: [&str; 2] = ["cindy.com.cn", "cindy.app"];
 
 /// 一个头像地址能不能当头像键：https、不太长、没有空白与控制字符。
 pub(crate) fn avatar_key(url: &str) -> Option<String> {
@@ -56,6 +59,23 @@ pub(crate) fn host_of(url: &str) -> Option<String> {
     let rest = url.strip_prefix("https://")?;
     let host = rest.split(['/', '?', '#']).next()?;
     (!host.is_empty() && !host.contains('@')).then(|| host.to_ascii_lowercase())
+}
+
+/// 主机（[`host_of`] 给的 host:port）是不是 Cindy 的头像域名或它的子域名：只认字母、数字、`-`、`.`，没有空段，
+/// 端口只能不写或写 443。`evilcindy.app`、`cindy.app.evil.com` 都不算。
+pub(crate) fn is_cindy_avatar_host(host: &str) -> bool {
+    let name = match host.split_once(':') {
+        Some((name, "443")) => name,
+        Some(_) => return false,
+        None => host,
+    };
+    let well_formed = !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.')
+        && name.split('.').all(|label| !label.is_empty());
+    well_formed
+        && CINDY_AVATAR_DOMAINS
+            .iter()
+            .any(|domain| name == *domain || name.strip_suffix(domain).is_some_and(|sub| sub.ends_with('.')))
 }
 
 /// 这么多字节的头像收不收（不超过 [`AVATAR_MAX_BYTES`]）。
@@ -117,7 +137,7 @@ impl Profiles {
 /// 取过的头像（地址 → 字节），按最近使用留 [`AVATAR_CACHE_MAX`] 张、合计不超过 [`AVATAR_CACHE_MAX_BYTES`]。
 pub(crate) struct Avatars {
     http: friend_im_client::web::Client,
-    /// 允许取头像的主机（自己头像地址的主机）。
+    /// 除 Cindy 头像域名外再允许取头像的主机（自己头像地址的主机）。
     allowed: Mutex<Option<String>>,
     cache: Mutex<VecDeque<(String, std::sync::Arc<Vec<u8>>)>>,
 }
@@ -145,10 +165,12 @@ impl Avatars {
         }
     }
 
-    /// 这个地址能不能取：https、主机在名单里。
+    /// 这个地址能不能取：https、主机是 Cindy 的头像域名，或是自己头像地址的主机。
     pub(crate) fn may_fetch(&self, url: &str) -> bool {
         avatar_key(url).is_some()
-            && host_of(url).is_some_and(|host| self.allowed.lock().expect("头像名单锁中毒").as_deref() == Some(host.as_str()))
+            && host_of(url).is_some_and(|host| {
+                is_cindy_avatar_host(&host) || self.allowed.lock().expect("头像名单锁中毒").as_deref() == Some(host.as_str())
+            })
     }
 
     /// 一张头像的全部字节（先看内存，没有再取）。
@@ -371,5 +393,44 @@ mod tests {
         assert!(avatars.get("https://evil.example.org/a.png").await.is_err());
         avatars.put("https://cdn.example.com/a.png", vec![0xFF, 0xD8, 0xFF, 0xE0]);
         assert_eq!(avatars.get("https://cdn.example.com/a.png").await.unwrap().len(), 4);
+    }
+
+    // 自己的 Cindy 身份没有头像（宿主给的 avatarUrl 为空）时，名单里没有自己头像的主机，好友的 Cindy 头像照样能取；
+    // 以前名单只有自己头像的主机，自己没头像就谁的头像都不取。
+    #[test]
+    fn friends_cindy_avatars_are_taken_without_an_avatar_of_my_own() {
+        let avatars = Avatars::default();
+        avatars.allow_host_of(None);
+        assert!(avatars.may_fetch("https://hotfix.cindy.com.cn/cindy/public/avatar/m1/a.png"), "中国区实测的头像主机");
+        assert!(avatars.may_fetch("https://cdn.cindy.app/avatar/m1/a.png"), "国际区");
+        assert!(avatars.may_fetch("https://cindy.app/avatar/a.png"));
+        assert!(!avatars.may_fetch("https://cdn.example.com/a.png"), "别的网站仍不取");
+        assert!(!avatars.may_fetch("http://hotfix.cindy.com.cn/a.png"), "只取 https");
+    }
+
+    // 只认 Cindy 的域名本身与子域名，默认端口；冒名的域名、别的端口都不算。
+    #[test]
+    fn only_real_cindy_hosts_count() {
+        for host in ["cindy.com.cn", "hotfix.cindy.com.cn", "a.b.cindy.com.cn", "cindy.app", "cdn.cindy.app", "cdn.cindy.app:443"] {
+            assert!(is_cindy_avatar_host(host), "{host}");
+        }
+        for host in [
+            "evilcindy.app",
+            "cindy.app.evil.com",
+            "cindy.com.cn.evil.com",
+            "xcindy.com.cn",
+            "com.cn",
+            "app",
+            ".cindy.app",
+            "a..cindy.app",
+            "cdn.cindy.app:8443",
+            "cdn.cindy.app:",
+            "[::1]",
+            "cindy_app",
+            "",
+        ] {
+            assert!(!is_cindy_avatar_host(host), "{host}");
+        }
+        assert!(Avatars::default().may_fetch("https://HOTFIX.Cindy.com.cn/a.png"), "主机名不分大小写");
     }
 }
