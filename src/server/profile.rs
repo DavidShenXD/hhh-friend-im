@@ -1,30 +1,91 @@
-//! 加密的个人资料与头像（第三阶段方案 plan-v1 §14.4，契约 S1“名字和头像沿用 Cindy”）。
+//! 加密的个人资料与头像（契约 friend-im v6：头像用 HHH 自己的；第三阶段 plan-v1 §14.4 的个人资料机制沿用）。
 //!
-//! - **发出**：头像地址在登录时从宿主拿到（`hostAccount.avatarUrl`），记在凭据里。上线后和上次发出去的不一样，就往自己在的
-//!   每个会话发一条个人资料（`Content::Profile`，和普通消息一样只有会话里的人解得开），限速发完再记下“发过了”。
+//! - **发出**：宿主经 `account/avatar` 交来本机用户的头像（自定义的，或画着名字的默认头像，契约 provider-protocol v35），
+//!   插件在内存里记最新一张。它和上次发出去的（凭据里记摘要）不一样时，往自己在的每个会话上传一份加密头像文件、再发一条
+//!   带 `photo` 的个人资料（`Content::Profile`，只有会话里的人解得开），限速发完记下摘要；新会话先传再发。借来的凭据不发。
+//!   不再写 Cindy 头像地址。
 //! - **收到**：个人资料不显示成消息；按发送人记最新的一份（日志序号大的为准，内存里至多 [`PROFILES_MAX`] 人），推
 //!   `people` 事件告诉宿主这个人的头像键；之后人名、成员、私聊会话都带上它。
-//! - **头像键**就是头像地址（不超过 [`AVATAR_KEY_MAX`] 字节）。宿主来读（`avatars/read`）时插件按地址取：只取 https、主机在
-//!   允许的名单里、至多 [`AVATAR_MAX_BYTES`]、只收 PNG / JPEG / WebP / GIF，内存里留最近 [`AVATAR_CACHE_MAX`] 张、合计不超过
-//!   [`AVATAR_CACHE_MAX_BYTES`]。名单：Cindy 两个区域的域名（[`CINDY_AVATAR_DOMAINS`]，含子域名、只走默认端口），再加上
-//!   自己头像地址的主机（Cindy 给的，可信）；自己没有头像时照样能看好友的头像。好友不能借个人资料让插件去连任意网站。
+//! - **头像键**：加密头像文件写成 [`PHOTO_KEY_PREFIX`] 开头的键（文件编号、钥匙、大小、类型），宿主来读时下载解密；
+//!   自己的头像是 [`SELF_KEY_PREFIX`] 开头的键，直接给内存里宿主交来的那张。旧版好友发的 https 地址仍按地址取（过渡）：
+//!   只取 https、主机在允许的名单里、至多 [`AVATAR_MAX_BYTES`]、只收 PNG / JPEG / WebP / GIF。名单：Cindy 两个区域的域名
+//!   （[`CINDY_AVATAR_DOMAINS`]，含子域名、只走默认端口），再加上自己旧头像地址的主机；好友不能借个人资料让插件去连任意网站。
+//!   取过的都在内存里留最近 [`AVATAR_CACHE_MAX`] 张、合计不超过 [`AVATAR_CACHE_MAX_BYTES`]。
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::Duration;
 
 use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::engine::general_purpose::{STANDARD as BASE64, URL_SAFE_NO_PAD as BASE64_URL};
 use friend_im_client::ClientError;
-use friend_im_client::core::ids::{ConvId, MsgId, Uid};
-use friend_im_client::core::message::Content;
-use hhh_im_protocol::method::{AvatarsReadParams, ResourceChunk};
+use friend_im_client::core::bytes::Fixed;
+use friend_im_client::core::file::FileRef;
+use friend_im_client::core::ids::{ConvId, FileId, MsgId, Uid};
+use friend_im_client::core::message::{Content, PHOTO_MAX};
+use hhh_im_protocol::method::{AccountAvatarParams, AvatarsReadParams, ResourceChunk};
 use hhh_im_protocol::rpc::{ErrorKind, RpcError};
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
 
 use super::session::Live;
 use super::{Server, errors};
 use crate::credential::Announced;
+
+/// 加密头像文件的头像键前缀：`fim-photo:v1:<文件编号>.<钥匙>.<字节数>.<p|j>`（约 90 字节，不超过协议的编号上限）。
+pub(crate) const PHOTO_KEY_PREFIX: &str = "fim-photo:v1:";
+/// 自己头像的头像键前缀：`fim-self:<摘要前 16 位>`，换了头像键就变、宿主重读。
+pub(crate) const SELF_KEY_PREFIX: &str = "fim-self:";
+
+/// 宿主交来的本机用户头像（`account/avatar`）：只在内存里，凭据里只记发过的摘要。
+#[derive(Clone)]
+pub(crate) struct HostPhoto {
+    pub(crate) mime: String,
+    pub(crate) bytes: std::sync::Arc<Vec<u8>>,
+    pub(crate) sha256: String,
+}
+
+impl HostPhoto {
+    /// 自己头像的头像键。
+    pub(crate) fn self_key(&self) -> String {
+        format!("{SELF_KEY_PREFIX}{}", &self.sha256[..16])
+    }
+}
+
+/// 一份加密头像文件写成头像键。
+pub(crate) fn photo_key(file: &FileRef) -> String {
+    let kind = if file.mime == "image/jpeg" { 'j' } else { 'p' };
+    format!("{PHOTO_KEY_PREFIX}{}.{}.{}.{kind}", file.id.as_str(), BASE64_URL.encode(file.key.0), file.size)
+}
+
+/// 头像键读回加密头像文件；不是这种键或写法不对为空。
+pub(crate) fn parse_photo_key(key: &str) -> Option<FileRef> {
+    let rest = key.strip_prefix(PHOTO_KEY_PREFIX)?;
+    let mut parts = rest.split('.');
+    let (id, secret, size, kind) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let secret: [u8; 32] = BASE64_URL.decode(secret).ok()?.try_into().ok()?;
+    let size: u64 = size.parse().ok()?;
+    let (name, mime) = match kind {
+        "p" => ("avatar.png", "image/png"),
+        "j" => ("avatar.jpg", "image/jpeg"),
+        _ => return None,
+    };
+    (size <= PHOTO_MAX).then_some(FileRef {
+        id: FileId::parse(id).ok()?,
+        key: Fixed(secret),
+        size,
+        name: name.to_owned(),
+        mime: mime.to_owned(),
+    })
+}
+
+/// 一份个人资料的头像键：新版的加密头像文件优先，旧版的 https 地址其次。
+pub(crate) fn profile_key(avatar: Option<&str>, photo: Option<&FileRef>) -> Option<String> {
+    photo.map(photo_key).or_else(|| avatar.and_then(avatar_key))
+}
 
 /// 记多少人的个人资料。
 pub(crate) const PROFILES_MAX: usize = 4096;
@@ -105,9 +166,9 @@ pub(crate) struct Profiles {
 }
 
 impl Profiles {
-    /// 记下一份个人资料；比已记的新（日志序号大）才算数。返回这个人的头像是不是变了（变了要告诉宿主）。
-    pub(crate) fn note(&self, uid: &Uid, log: u64, avatar: Option<&str>) -> bool {
-        let key = avatar.and_then(avatar_key);
+    /// 记下一份个人资料（头像键见 [`profile_key`]）；比已记的新（日志序号大）才算数。返回这个人的头像是不是变了
+    /// （变了要告诉宿主）。
+    pub(crate) fn note(&self, uid: &Uid, log: u64, key: Option<String>) -> bool {
         let mut seen = self.seen.lock().expect("个人资料锁中毒");
         if let Some((known, previous)) = seen.get(uid) {
             if *known >= log {
@@ -214,7 +275,7 @@ impl Avatars {
     }
 
     /// 记进缓存（最新的放最后），再按张数与合计字节数丢最旧的；最新的一张总留着。
-    fn remember(&self, url: &str, bytes: std::sync::Arc<Vec<u8>>) {
+    pub(crate) fn remember(&self, url: &str, bytes: std::sync::Arc<Vec<u8>>) {
         let mut cache = self.cache.lock().expect("头像缓存锁中毒");
         cache.retain(|(key, _)| key != url);
         cache.push_back((url.to_owned(), bytes));
@@ -226,7 +287,7 @@ impl Avatars {
         }
     }
 
-    fn cached(&self, url: &str) -> Option<std::sync::Arc<Vec<u8>>> {
+    pub(crate) fn cached(&self, url: &str) -> Option<std::sync::Arc<Vec<u8>>> {
         let mut cache = self.cache.lock().expect("头像缓存锁中毒");
         let at = cache.iter().position(|(key, _)| key == url)?;
         let entry = cache.remove(at)?;
@@ -242,30 +303,77 @@ impl Avatars {
     }
 }
 
+/// 宿主交来的头像核对后读出来：形状合规（协议 v35）、base64 解得开、字节数与摘要对得上、确实是 PNG / JPEG。
+///
+/// # Errors
+/// 哪一项对不上就回参数错误（给人看的原因）。
+pub(crate) fn host_photo(params: AccountAvatarParams) -> Result<Option<HostPhoto>, RpcError> {
+    let Some(avatar) = params.avatar else {
+        return Ok(None);
+    };
+    if let Some(problem) = avatar.problem() {
+        return Err(errors::of(ErrorKind::InvalidRequest, problem));
+    }
+    let bytes = BASE64
+        .decode(avatar.data.as_bytes())
+        .map_err(|_| errors::of(ErrorKind::InvalidRequest, "头像 base64 解不开。"))?;
+    let sha256: String = Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect();
+    if bytes.len() as u64 != avatar.size || sha256 != avatar.sha256 {
+        return Err(errors::of(ErrorKind::InvalidRequest, "头像的字节数或摘要对不上。"));
+    }
+    if image_mime(&bytes) != Some(avatar.mime.as_str()) {
+        return Err(errors::of(ErrorKind::InvalidRequest, "头像内容与类型对不上。"));
+    }
+    Ok(Some(HostPhoto { mime: avatar.mime, bytes: std::sync::Arc::new(bytes), sha256 }))
+}
+
 impl Server {
-    /// 上线后：头像和上次发出去的不一样（或从没发过），就往自己在的每个会话发一条个人资料，发完记下并存凭据。
-    /// 没连上、发不出去就停下，下次上线再发。
-    pub(crate) async fn announce_profile(&self, live: &Live) {
-        let (avatar, outdated) = {
-            let credential = live.credential.lock().expect("凭据锁中毒");
-            (credential.avatar.clone(), credential.profile_outdated())
+    /// `account/avatar`（契约 provider-protocol v35）：记下宿主交来的本机用户头像，告诉宿主“我的头像换了”，在线时在后台
+    /// 往各会话发（不让宿主等上传）。
+    pub(crate) async fn account_avatar(self: &std::sync::Arc<Self>, params: AccountAvatarParams) -> Result<Value, RpcError> {
+        let photo = host_photo(params)?;
+        tracing::info!(
+            has_avatar = photo.is_some(),
+            size = photo.as_ref().map_or(0, |p| p.bytes.len()),
+            "收到宿主交来的本机用户头像"
+        );
+        *self.photo.lock().expect("头像锁中毒") = photo;
+        if let Ok(live) = self.live().await {
+            super::push::me_changed(&live).await;
+            let (server, sending) = (self.clone(), live.clone());
+            let task = tokio::spawn(async move { server.announce_photo(&sending).await });
+            live.hold(task.abort_handle());
+        }
+        Ok(serde_json::json!({}))
+    }
+
+    /// 宿主交来的头像和上次发出去的不一样，就往自己在的每个会话传一份加密头像、发一条带它的个人资料，发完记下摘要并存
+    /// 凭据（契约 friend-im v6 H1、H2）。借来的凭据不发；还没收到头像不发；没连上、发不出去就停下，下次上线或换头像再发。
+    pub(crate) async fn announce_photo(&self, live: &Live) {
+        if live.read_only {
+            tracing::info!("凭据是借来的，不往会话里发个人资料");
+            return;
+        }
+        let Some(photo) = self.photo.lock().expect("头像锁中毒").clone() else {
+            return;
         };
-        if !outdated {
+        let announced = live.credential.lock().expect("凭据锁中毒").announced.clone();
+        if announced.as_ref().and_then(|a| a.photo.as_deref()) == Some(photo.sha256.as_str()) {
             return;
         }
         let convs = match live.client.convs().await {
             Ok(convs) => convs,
             Err(error) => {
-                tracing::info!(%error, "会话列表取不到，个人资料下次上线再发");
+                tracing::info!(%error, "会话列表取不到，个人资料下次再发");
                 return;
             }
         };
         let targets: Vec<ConvId> = convs.into_iter().filter(|c| c.member).map(|c| c.conv).collect();
-        tracing::info!(count = targets.len(), has_avatar = avatar.is_some(), "往会话里发个人资料");
+        tracing::info!(count = targets.len(), size = photo.bytes.len(), "往会话里发带头像的个人资料");
         for conv in &targets {
-            if let Err(error) = self.send_profile(live, conv, avatar.clone()).await {
+            if let Err(error) = self.send_photo(live, conv, &photo).await {
                 if matches!(error, ClientError::Disconnected | ClientError::Timeout) {
-                    tracing::info!(%error, "发个人资料时断开了，下次上线再发");
+                    tracing::info!(%error, "发个人资料时断开了，下次再发");
                     return;
                 }
                 tracing::info!(%conv, %error, "这个会话发不了个人资料，跳过");
@@ -274,7 +382,7 @@ impl Server {
         }
         let credential = {
             let mut current = live.credential.lock().expect("凭据锁中毒");
-            current.announced = Some(Announced { avatar });
+            current.announced = Some(Announced { avatar: None, photo: Some(photo.sha256.clone()) });
             current.clone()
         };
         if self.save_credential(&credential).await.is_err() {
@@ -282,26 +390,65 @@ impl Server {
         }
     }
 
-    /// 刚进的会话（建群、加好友、被拉进群、凭链接进群）：发一条个人资料，会话里的人才看得到头像。
+    /// 刚进的会话（建群、加好友、被拉进群、凭链接进群）：有头像就传一份、发一条个人资料，会话里的人才看得到头像（H3）。
     pub(crate) async fn announce_to(&self, live: &Live, conv: &ConvId) {
         if live.read_only {
             return;
         }
-        let avatar = live.credential.lock().expect("凭据锁中毒").avatar.clone();
-        if let Err(error) = self.send_profile(live, conv, avatar).await {
+        let Some(photo) = self.photo.lock().expect("头像锁中毒").clone() else {
+            return;
+        };
+        if let Err(error) = self.send_photo(live, conv, &photo).await {
             tracing::info!(%conv, %error, "新会话里发个人资料没成，换头像或下次发时再补");
         }
     }
 
-    /// 发一条个人资料（和用户自己发的消息排队，一条发完再发下一条）。
-    async fn send_profile(&self, live: &Live, conv: &ConvId, avatar: Option<String>) -> Result<(), ClientError> {
+    /// 往一个会话传一份加密头像、再发一条带它的个人资料（和用户自己发的消息排队，一条发完再发下一条）。
+    async fn send_photo(&self, live: &Live, conv: &ConvId, photo: &HostPhoto) -> Result<(), ClientError> {
+        let name = if photo.mime == "image/jpeg" { "avatar.jpg" } else { "avatar.png" };
+        let file = live
+            .client
+            .upload(conv, std::io::Cursor::new(photo.bytes.as_slice()), photo.bytes.len() as u64, name, &photo.mime)
+            .await?;
         let _turn = self.sends.gate.lock().await;
-        live.client.send(conv, &MsgId::random(), Content::Profile { avatar }).await.map(|_| ())
+        live.client
+            .send(conv, &MsgId::random(), Content::Profile { avatar: None, photo: Some(file) })
+            .await
+            .map(|_| ())
     }
 
-    /// `avatars/read`：按头像键（就是头像地址）读一段。地址不让取、取不到时回“没有”。
+    /// 一张头像的全部字节：自己的直接给内存里那张；加密头像文件下载解密；旧版的 https 地址按允许名单取。
+    async fn avatar_bytes(&self, key: &str) -> Result<std::sync::Arc<Vec<u8>>, String> {
+        if key.starts_with(SELF_KEY_PREFIX) {
+            return self.photo.lock().expect("头像锁中毒").as_ref().map(|photo| photo.bytes.clone()).ok_or_else(|| {
+                tracing::info!("自己的头像还没收到");
+                "还没有头像。".to_owned()
+            });
+        }
+        let Some(file) = parse_photo_key(key) else {
+            return self.avatars.get(key).await;
+        };
+        if let Some(found) = self.avatars.cached(key) {
+            return Ok(found);
+        }
+        let live = self.live().await.map_err(|_| "没连上，读不了头像。".to_owned())?;
+        let mut bytes = Vec::with_capacity(file.size as usize);
+        live.client.download(&file, &mut bytes).await.map_err(|error| {
+            tracing::info!(%error, "加密头像下载不下来");
+            "头像取不到。".to_owned()
+        })?;
+        if image_mime(&bytes).is_none() {
+            tracing::info!("解开的头像不是认得的图片");
+            return Err("头像不是图片。".into());
+        }
+        let bytes = std::sync::Arc::new(bytes);
+        self.avatars.remember(key, bytes.clone());
+        Ok(bytes)
+    }
+
+    /// `avatars/read`：按头像键读一段。不让取、取不到时回“没有”。
     pub(crate) async fn read_avatar(&self, params: AvatarsReadParams) -> Result<Value, RpcError> {
-        let bytes = self.avatars.get(&params.key).await.map_err(|reason| errors::of(ErrorKind::NotFound, reason))?;
+        let bytes = self.avatar_bytes(&params.key).await.map_err(|reason| errors::of(ErrorKind::NotFound, reason))?;
         let total = bytes.len() as u64;
         if params.offset > total {
             return Err(errors::of(ErrorKind::InvalidRequest, "读的位置超出了头像大小。"));
@@ -348,13 +495,75 @@ mod tests {
     fn the_latest_profile_wins() {
         let profiles = Profiles::default();
         let (a, b) = (Uid::from_raw([1; 16]), Uid::from_raw([2; 16]));
-        assert!(profiles.note(&a, 10, Some("https://x.com/1.png")));
-        assert!(!profiles.note(&a, 9, Some("https://x.com/0.png")), "旧的不算");
-        assert!(!profiles.note(&a, 11, Some("https://x.com/1.png")), "没变不报");
+        let key = |url: &str| profile_key(Some(url), None);
+        assert!(profiles.note(&a, 10, key("https://x.com/1.png")));
+        assert!(!profiles.note(&a, 9, key("https://x.com/0.png")), "旧的不算");
+        assert!(!profiles.note(&a, 11, key("https://x.com/1.png")), "没变不报");
         assert!(profiles.note(&a, 12, None), "撤掉头像要报");
         assert_eq!(profiles.avatar(&a), None);
-        assert!(profiles.note(&b, 1, Some("http://x.com/insecure.png")), "第一次见要报");
+        assert!(profiles.note(&b, 1, key("http://x.com/insecure.png")), "第一次见要报");
         assert_eq!(profiles.avatar(&b), None, "不是 https 的不当头像");
+    }
+
+    fn photo(mime: &str, size: u64) -> FileRef {
+        let name = if mime == "image/jpeg" { "avatar.jpg" } else { "avatar.png" };
+        FileRef { id: FileId::from_raw([3; 16]), key: Fixed([4; 32]), size, name: name.into(), mime: mime.into() }
+    }
+
+    // 加密头像文件写成头像键再读回来不走样；写法不对、太大、类型不认的都读不出来。
+    #[test]
+    fn photo_keys_round_trip_and_reject_bad_ones() {
+        for mime in ["image/png", "image/jpeg"] {
+            let file = photo(mime, 70_000);
+            let key = photo_key(&file);
+            assert!(key.starts_with(PHOTO_KEY_PREFIX));
+            assert!(key.len() <= AVATAR_KEY_MAX, "头像键要放得进协议的编号");
+            assert_eq!(parse_photo_key(&key), Some(file));
+        }
+        let key = photo_key(&photo("image/png", 70_000));
+        assert!(parse_photo_key(&format!("{key}.x")).is_none(), "多一段不认");
+        assert!(parse_photo_key(&key.replace(".p", ".g")).is_none(), "类型不认");
+        assert!(parse_photo_key(&photo_key(&photo("image/png", PHOTO_MAX + 1))).is_none(), "太大不认");
+        assert!(parse_photo_key("https://x.com/1.png").is_none());
+    }
+
+    // 个人资料带了加密头像文件就用它，没带才认旧版的 https 地址（过渡期）。
+    #[test]
+    fn a_profile_photo_wins_over_the_old_avatar_address() {
+        let file = photo("image/png", 100);
+        assert_eq!(profile_key(Some("https://x.com/1.png"), Some(&file)), Some(photo_key(&file)));
+        assert_eq!(profile_key(Some("https://x.com/1.png"), None).as_deref(), Some("https://x.com/1.png"));
+        assert_eq!(profile_key(Some("http://x.com/1.png"), None), None);
+        assert_eq!(profile_key(None, None), None);
+    }
+
+    fn host_avatar(mime: &str, bytes: &[u8]) -> hhh_im_protocol::method::HostAvatar {
+        hhh_im_protocol::method::HostAvatar {
+            mime: mime.into(),
+            data: BASE64.encode(bytes),
+            sha256: Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect(),
+            size: bytes.len() as u64,
+        }
+    }
+
+    // 宿主交来的头像：合规的收下、撤掉的为空；摘要、字节数、内容类型对不上的回参数错误。
+    #[test]
+    fn host_photos_are_checked_before_use() {
+        let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0];
+        let ok = host_photo(AccountAvatarParams { avatar: Some(host_avatar("image/png", &png)) }).unwrap().unwrap();
+        assert_eq!((ok.mime.as_str(), ok.bytes.len()), ("image/png", png.len()));
+        assert_eq!(ok.self_key(), format!("{SELF_KEY_PREFIX}{}", &ok.sha256[..16]));
+        assert!(host_photo(AccountAvatarParams { avatar: None }).unwrap().is_none());
+
+        let mut tampered = host_avatar("image/png", &png);
+        tampered.sha256 = "0".repeat(64);
+        let wrong_type = host_avatar("image/jpeg", &png);
+        let mut wrong_size = host_avatar("image/png", &png);
+        wrong_size.size += 1;
+        for avatar in [tampered, wrong_type, wrong_size] {
+            let err = host_photo(AccountAvatarParams { avatar: Some(avatar) }).err().expect("要拒绝");
+            assert!(matches!(err.data.map(|data| data.kind), Some(ErrorKind::InvalidRequest)));
+        }
     }
 
     // Cindy 的头像实测有 1 MiB 出头的（一个组织身份的 PNG 是 1,062,747 字节）：照 HHH 读头像的上限收，不当成“太大”。

@@ -12,7 +12,7 @@ use hhh_im_protocol::method::{
     ActionDecl, ActionScope, InitializeParams, InitializeResult, ProviderInfo,
 };
 use hhh_im_protocol::platform::{
-    ActionRules, AvatarShape, Capabilities, ConversationCaps, DiscoveryDesc, EventCaps,
+    AccountCaps, ActionRules, AvatarShape, Capabilities, ConversationCaps, DiscoveryDesc, EventCaps,
     HistoryMode, Limits, MessageCaps, OwnWithin, PeopleCaps, PlatformDesc, RateBudget,
     ResourceCaps, SendCaps, SettingDecl,
 };
@@ -133,6 +133,11 @@ pub(crate) fn capabilities() -> Capabilities {
         retranslate: false,
         message_maintenance: false,
         session: Default::default(),
+        // 收宿主交来的本机用户头像，设成本人在 Cindy IM 的头像（契约 friend-im v6、provider-protocol v35）。
+        account: AccountCaps { host_avatar: true },
+        // 伙伴代发署名不声明（不在这一版范围）；性能自报由运行时替插件声明。
+        agent_attribution: Default::default(),
+        perf: false,
     }
 }
 
@@ -203,6 +208,8 @@ pub(crate) fn result() -> InitializeResult {
         settings: settings(),
         login_methods: login::login_methods(),
         actions: actions(),
+        // 读取前不向宿主申请额度：Cindy IM 是自己的服务器，没有平台限频要宿主统一结算。
+        read_request_gating: false,
     }
 }
 
@@ -242,6 +249,7 @@ mod tests {
         );
         assert_eq!(result["loginMethods"].as_array().unwrap().len(), 1);
         assert_eq!(result["capabilities"]["resources"]["avatars"], true);
+        assert_eq!(result["capabilities"]["account"]["hostAvatar"], true, "收宿主交来的头像");
         assert_eq!(result["capabilities"]["events"]["people"], true);
         let actions = actions();
         assert_eq!(actions.len(), 9);

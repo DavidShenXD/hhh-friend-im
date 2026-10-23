@@ -17,7 +17,7 @@ use serde_json::Value;
 use tokio::task::AbortHandle;
 
 use super::declare::{DEFAULT_SERVER, SETTING_SERVER};
-use super::profile::{Profiles, avatar_key};
+use super::profile::Profiles;
 use super::translate::Names;
 use super::{Server, errors, push};
 use crate::credential::{self, Credential};
@@ -46,6 +46,8 @@ pub(crate) struct Live {
     pub(crate) credential: Mutex<Credential>,
     /// 收到的个人资料（别人的头像）。
     pub(crate) profiles: Profiles,
+    /// 宿主交来的本机用户头像（与 [`super::Server`] 共用一份，重新上线也在）。
+    pub(crate) photo: Arc<std::sync::Mutex<Option<super::profile::HostPhoto>>>,
     /// 在等批准的新电脑：请求编号 → 请求（旧电脑这边，契约 S2）。
     pub(crate) requests: Mutex<BTreeMap<String, JoinRequestInfo>>,
     /// 电脑增减的提醒（契约 S4）：（编号，文字），看过“我的电脑”就拿掉。
@@ -85,10 +87,10 @@ impl Live {
         wanted.into_iter().filter_map(|u| names.get(&u).map(|n| (u, n.clone()))).collect()
     }
 
-    /// 这个人现在的头像键：自己用凭据里的，别人用收到的个人资料。
+    /// 这个人现在的头像键：自己用宿主交来的那张（契约 friend-im v6，不再用 Cindy 头像地址），别人用收到的个人资料。
     pub(crate) fn avatar_of(&self, uid: &Uid) -> Option<String> {
         if *uid == self.me {
-            return self.credential.lock().expect("凭据锁中毒").avatar.as_deref().and_then(avatar_key);
+            return self.photo.lock().expect("头像锁中毒").as_ref().map(super::profile::HostPhoto::self_key);
         }
         self.profiles.avatar(uid)
     }
@@ -280,7 +282,8 @@ impl Server {
             id: me.to_string(),
             id_type: None,
             name: client.name().await,
-            avatar: saved.avatar.as_deref().and_then(avatar_key),
+            // 自己的头像用宿主交来的那张（契约 friend-im v6）：上线时多半还没收到，收到后推人员资料。
+            avatar: self.photo.lock().expect("头像锁中毒").as_ref().map(super::profile::HostPhoto::self_key),
             tenant: None,
         };
         let live = Arc::new(Live {
@@ -289,6 +292,7 @@ impl Server {
             read_only,
             credential: Mutex::new(saved),
             profiles: Profiles::default(),
+            photo: self.photo.clone(),
             requests: Mutex::new(BTreeMap::new()),
             device_notes: Mutex::new(Vec::new()),
             outbox: Arc::new(push::Outbox::default()),
@@ -306,9 +310,8 @@ impl Server {
         let (server, after_live) = (self.clone(), live.clone());
         let after = tokio::spawn(async move {
             server.refresh_requests(&after_live).await;
-            if !after_live.read_only {
-                server.announce_profile(&after_live).await;
-            }
+            // 重新上线时已经有宿主交来的头像（插件没重启、只是重连）：没发过就补发。
+            server.announce_photo(&after_live).await;
         });
         live.hold(after.abort_handle());
         account
