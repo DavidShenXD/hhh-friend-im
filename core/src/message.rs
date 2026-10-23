@@ -82,21 +82,34 @@ pub enum Content {
         /// 被撤回的消息。
         target: MsgId,
     },
-    /// 发送人的个人资料（第三阶段，契约 S1“名字和头像沿用 Cindy”）：和普通消息一样只有会话里的人解得开，服务器看不出它是
-    /// 个人资料。现在只有头像地址；没有头像时为空（把以前的撤掉）。不给人看，收到的一方按发送人记最新的一份。
+    /// 发送人的个人资料：和普通消息一样只有会话里的人解得开，服务器看不出它是个人资料。不给人看，收到的一方按发送人
+    /// 记最新的一份。头像两种写法：`photo` 是这个会话里的加密头像文件（契约 friend-im v6，头像用 HHH 自己的）；
+    /// `avatar` 是旧版发的 Cindy 头像地址（第三阶段，新版只读不写）。都没有就是没有头像（把以前的撤掉）。
     Profile {
-        /// 头像地址（https，至多 [`AVATAR_URL_MAX`] 字节）。
+        /// 头像地址（https，至多 [`AVATAR_URL_MAX`] 字节）：旧版写的。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         avatar: Option<String>,
+        /// 加密头像文件（PNG 或 JPEG，至多 [`PHOTO_MAX`] 字节）：新版写的。旧版不认识这个字段，读到的是“没有头像”。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        photo: Option<FileRef>,
     },
 }
 
+/// 个人资料里加密头像文件的上限（与宿主交来的头像同一上限，契约 provider-protocol v35）。
+pub const PHOTO_MAX: u64 = 256 * 1024;
+
 impl Content {
     fn check(&self) -> Result<()> {
-        if let Self::Profile { avatar: Some(url) } = self
+        if let Self::Profile { avatar: Some(url), .. } = self
             && (!url.starts_with("https://") || url.len() > AVATAR_URL_MAX || url.chars().any(|c| c.is_whitespace() || c.is_control()))
         {
             return Err(CoreError::format("头像地址不对"));
+        }
+        if let Self::Profile { photo: Some(file), .. } = self {
+            file.check()?;
+            if !matches!(file.mime.as_str(), "image/png" | "image/jpeg") || file.size > PHOTO_MAX {
+                return Err(CoreError::format("头像文件不对"));
+            }
         }
         if let Self::Post { parts, .. } = self {
             if parts.is_empty() || parts.len() > PARTS_MAX {
@@ -384,16 +397,53 @@ mod tests {
             device: &device,
         };
         let url = "https://avatar.example.com/u/abc.png";
-        let body = MessageBody { v: MESSAGE_VERSION, ctime_ms: 1, content: Content::Profile { avatar: Some(url.into()) } };
+        let body = MessageBody { v: MESSAGE_VERSION, ctime_ms: 1, content: Content::Profile { avatar: Some(url.into()), photo: None } };
         let envelope = Envelope::seal(&conv, MsgId::random(), 1, &seed, &sender, &body).unwrap();
         assert_eq!(envelope.open(&seed, &device.public()).unwrap(), body);
         assert!(!serde_json::to_string(&envelope).unwrap().contains("avatar.example.com"), "服务器看不到头像地址");
         assert_eq!(serde_json::to_value(&body.content).unwrap(), serde_json::json!({ "type": "profile", "avatar": url }));
-        let cleared = Content::Profile { avatar: None };
+        let cleared = Content::Profile { avatar: None, photo: None };
         assert_eq!(serde_json::to_value(&cleared).unwrap(), serde_json::json!({ "type": "profile" }));
         for bad in ["http://avatar.example.com/a.png".to_owned(), format!("https://a.com/{}", "x".repeat(AVATAR_URL_MAX)), "https://a.com/a b".into()] {
-            let body = MessageBody { v: MESSAGE_VERSION, ctime_ms: 1, content: Content::Profile { avatar: Some(bad.clone()) } };
+            let body = MessageBody { v: MESSAGE_VERSION, ctime_ms: 1, content: Content::Profile { avatar: Some(bad.clone()), photo: None } };
             assert!(Envelope::seal(&conv, MsgId::random(), 1, &seed, &sender, &body).is_err(), "{bad}");
+        }
+    }
+
+    fn photo(mime: &str, size: u64) -> FileRef {
+        FileRef { id: crate::ids::FileId::random(), key: Fixed([7; 32]), size, name: "avatar.png".into(), mime: mime.into() }
+    }
+
+    // 契约 friend-im v6：个人资料带加密头像文件，照样加密签名、密文里找不到文件钥匙；旧版（只认 avatar 的写法）读到的是
+    // “没有头像”，不会解析失败变成解不开的消息；头像只收 PNG / JPEG、不超过 PHOTO_MAX。
+    #[test]
+    fn a_profile_carries_an_encrypted_photo_and_old_readers_see_no_avatar() {
+        let (uid, device) = sender_parts();
+        let conv = ConvId::random();
+        let seed = ConvSeed::generate();
+        let sender = Sender { uid: &uid, eldest: Fixed([1; 32]), device: &device };
+        let file = photo("image/png", 40_000);
+        let body = MessageBody { v: MESSAGE_VERSION, ctime_ms: 1, content: Content::Profile { avatar: None, photo: Some(file.clone()) } };
+        let envelope = Envelope::seal(&conv, MsgId::random(), 1, &seed, &sender, &body).unwrap();
+        assert_eq!(envelope.open(&seed, &device.public()).unwrap(), body);
+        assert!(!serde_json::to_string(&envelope).unwrap().contains(file.id.as_str()), "服务器看不到头像文件");
+
+        // 旧版的内容类型只有 avatar：读新版写的个人资料不报错，头像为空。
+        #[derive(Deserialize, Debug)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        enum OldContent {
+            Profile {
+                #[serde(default)]
+                avatar: Option<String>,
+            },
+        }
+        let wire = serde_json::to_value(&body.content).unwrap();
+        let old: OldContent = serde_json::from_value(wire).unwrap();
+        assert!(matches!(old, OldContent::Profile { avatar: None }), "{old:?}");
+
+        for bad in [photo("image/gif", 10), photo("image/png", PHOTO_MAX + 1)] {
+            let body = MessageBody { v: MESSAGE_VERSION, ctime_ms: 1, content: Content::Profile { avatar: None, photo: Some(bad) } };
+            assert!(Envelope::seal(&conv, MsgId::random(), 1, &seed, &sender, &body).is_err());
         }
     }
 }

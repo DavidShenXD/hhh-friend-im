@@ -180,9 +180,10 @@ async fn push_conversation(live: &Live, outbox: &Outbox, conv: &ConvId) {
 }
 
 async fn on_message(live: &Live, outbox: &Outbox, message: Message) {
-    if let Some(Content::Profile { avatar }) = &message.content {
+    if let Some(Content::Profile { avatar, photo }) = &message.content {
         // 个人资料不是给人看的消息：记下这个人的头像，变了就告诉宿主（人与私聊会话）。
-        profile_seen(live, &message.sender, message.log, avatar.as_deref()).await;
+        let key = super::profile::profile_key(avatar.as_deref(), photo.as_ref());
+        profile_seen(live, &message.sender, message.log, key).await;
         return;
     }
     ensure_conversation(live, outbox, &message.conv).await;
@@ -200,18 +201,28 @@ async fn on_message(live: &Live, outbox: &Outbox, message: Message) {
     outbox.push(Event::Messages { conversation_id: message.conv.to_string(), messages: vec![wire] });
 }
 
-/// 见到一份个人资料（推来的或翻历史翻到的）：比记下的新、头像变了就推这个人与和他的私聊。
-pub(crate) async fn profile_seen(live: &Live, sender: &Uid, log: u64, avatar: Option<&str>) {
-    if *sender == live.me || !live.profiles.note(sender, log, avatar) {
+/// 见到一份个人资料（推来的或翻历史翻到的，头像键见 `profile::profile_key`）：比记下的新、头像变了就推这个人与
+/// 和他的私聊。
+pub(crate) async fn profile_seen(live: &Live, sender: &Uid, log: u64, key: Option<String>) {
+    if *sender == live.me || !live.profiles.note(sender, log, key) {
         return;
     }
-    let names = live.names([sender.clone()]).await;
-    let person = Person { id: sender.to_string(), id_type: None, kind: PersonKind::User, name: names.get(sender).cloned(), avatar: live.avatar_of(sender) };
-    live.outbox.push(Event::People { people: vec![person] });
+    push_person(live, sender).await;
     for conv in live.direct_with(sender) {
         live.forget_conversation(&conv);
         push_conversation(live, &live.outbox, &conv).await;
     }
+}
+
+/// 自己的头像换了（宿主交来新头像，契约 provider-protocol v35）：推一条自己的人员资料，宿主换上新头像键。
+pub(crate) async fn me_changed(live: &Live) {
+    push_person(live, &live.me).await;
+}
+
+async fn push_person(live: &Live, uid: &Uid) {
+    let names = live.names([uid.clone()]).await;
+    let person = Person { id: uid.to_string(), id_type: None, kind: PersonKind::User, name: names.get(uid).cloned(), avatar: live.avatar_of(uid) };
+    live.outbox.push(Event::People { people: vec![person] });
 }
 
 /// 一条消息里要显示名字的人：发送人与被提及的人。

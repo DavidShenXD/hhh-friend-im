@@ -577,9 +577,10 @@ pub(crate) async fn history_page(
     for item in &items {
         // 翻到的个人资料照记（新电脑、重启后从历史里重新认识别人的头像）。
         if let HistoryItem::Message(m) = item
-            && let Some(Content::Profile { avatar }) = &m.content
+            && let Some(Content::Profile { avatar, photo }) = &m.content
         {
-            push::profile_seen(live, &m.sender, m.log, avatar.as_deref()).await;
+            let key = super::profile::profile_key(avatar.as_deref(), photo.as_ref());
+            push::profile_seen(live, &m.sender, m.log, key).await;
         }
         let wire = match item {
             HistoryItem::Message(m) => translate::message(m, &names),

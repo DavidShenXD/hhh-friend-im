@@ -67,6 +67,8 @@ pub(crate) struct Server {
     pub(crate) server_url: std::sync::Mutex<Option<String>>,
     /// 取过的头像与允许取头像的主机。
     pub(crate) avatars: profile::Avatars,
+    /// 宿主交来的本机用户头像（`account/avatar`，契约 provider-protocol v35）；只在内存里，上线的账号共用这一份。
+    pub(crate) photo: Arc<std::sync::Mutex<Option<profile::HostPhoto>>>,
     /// 正在处理的宿主请求（编号 → 任务），`$/cancel` 用。
     tasks: std::sync::Mutex<HashMap<String, AbortHandle>>,
 }
@@ -155,6 +157,7 @@ impl Server {
                 flows: flow::Flows::default(),
                 server_url: std::sync::Mutex::new(None),
                 avatars: profile::Avatars::default(),
+                photo: Arc::default(),
                 tasks: std::sync::Mutex::new(HashMap::new()),
             }),
             writes,
@@ -263,6 +266,10 @@ impl Server {
             },
             Method::AvatarsRead => match params(value) {
                 Ok(p) => self.read_avatar(p).await,
+                Err(error) => Err(error),
+            },
+            Method::AccountAvatar => match params(value) {
+                Ok(p) => self.account_avatar(p).await,
                 Err(error) => Err(error),
             },
             Method::UploadsBegin => match params(value) {

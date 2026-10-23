@@ -113,6 +113,7 @@ fn wire(id: String, conv: String, sender: Sender, created_at_ms: i64, content: V
         reactions: None,
         raw: None,
         edit_draft: None,
+        agent_attribution: None,
     }
 }
 
@@ -316,7 +317,7 @@ mod tests {
         let gone = message(&msg(None), &names).unwrap();
         assert!(gone.deleted && gone.content.is_empty());
         assert!(message(&msg(Some(Content::Recall { target: MsgId::from_raw([2; 16]) })), &names).is_none(), "撤回动作本身不显示");
-        assert!(message(&msg(Some(Content::Profile { avatar: Some("https://a.example.com/1.png".into()) })), &names).is_none(), "个人资料不显示");
+        assert!(message(&msg(Some(Content::Profile { avatar: Some("https://a.example.com/1.png".into()), photo: None })), &names).is_none(), "个人资料不显示");
         let bad = unreadable("c", &MsgId::from_raw([2; 16]), &uid(5), 5, &names);
         assert!(bad.incomplete);
         assert!(matches!(&bad.content[0], Block::Unsupported { .. }));

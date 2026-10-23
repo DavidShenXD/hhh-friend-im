@@ -158,3 +158,23 @@ fn later_optional_fields_keep_version_1_frames() {
     let text = serde_json::to_string(&windowed).unwrap();
     assert_eq!(serde_json::from_str::<Request>(&text).unwrap(), windowed);
 }
+
+/// 个人资料后加的加密头像文件（`photo`，0.4.0）：不带时与旧版写的一字不差，旧版写的照样读得懂；带了读回不走样。
+#[test]
+fn a_profile_photo_keeps_older_profiles() {
+    let old = r#"{"type":"profile","avatar":"https://cdn.cindy.app/a.png"}"#;
+    let plain = Content::Profile { avatar: Some("https://cdn.cindy.app/a.png".into()), photo: None };
+    assert_eq!(serde_json::to_string(&plain).unwrap(), old, "不带头像文件的个人资料变了");
+    assert_eq!(serde_json::from_str::<Content>(old).unwrap(), plain, "旧版的个人资料读不懂了");
+    let photo = file::FileRef {
+        id: friend_im_core::ids::FileId::from_raw([0xbb; 16]),
+        key: Fixed(FILE_KEY),
+        size: 2_048,
+        name: "avatar.png".into(),
+        mime: "image/png".into(),
+    };
+    let with_photo = Content::Profile { avatar: None, photo: Some(photo) };
+    let text = serde_json::to_string(&with_photo).unwrap();
+    assert!(!text.contains("\"avatar\""), "新版不写 Cindy 头像地址");
+    assert_eq!(serde_json::from_str::<Content>(&text).unwrap(), with_photo);
+}

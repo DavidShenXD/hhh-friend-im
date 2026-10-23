@@ -25,11 +25,11 @@ pub struct Credential {
     pub device_name: String,
     /// 电脑私钥与登录凭证。
     pub device: Credentials,
-    /// 自己的 Cindy 头像地址（登录时宿主给的 `hostAccount.avatarUrl`，第三阶段）；没有为空。
+    /// 自己的 Cindy 头像地址（旧宿主登录时给的 `hostAccount.avatarUrl`，第三阶段）；没有为空。新版不再用它当头像
+    /// （契约 friend-im v6），只留着认旧好友头像所在的主机。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar: Option<String>,
-    /// 上次往会话里发出去的个人资料（第三阶段，plan-v1 §14.4）；和 [`Credential::avatar`] 不一样时上线后再发一遍。
-    /// 从没发过为空。
+    /// 上次往会话里发出去的个人资料（plan-v1 §14.4）；和宿主交来的头像不一样时再发一遍。从没发过为空。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub announced: Option<Announced>,
 }
@@ -37,9 +37,12 @@ pub struct Credential {
 /// 发出去过的个人资料。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Announced {
-    /// 当时的头像地址（没有头像为空）。
+    /// 旧版发的头像地址（没有为空）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar: Option<String>,
+    /// 发出去的 HHH 头像的摘要（契约 friend-im v6；没有为空）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photo: Option<String>,
 }
 
 impl Credential {
@@ -60,11 +63,6 @@ impl Credential {
     pub fn with_avatar(mut self, avatar: Option<&str>) -> Self {
         self.avatar = avatar.filter(|url| url.starts_with("https://")).map(str::to_owned);
         self
-    }
-
-    /// 个人资料还要不要发：从没发过、或头像换了。
-    pub fn profile_outdated(&self) -> bool {
-        self.announced.as_ref().is_none_or(|sent| sent.avatar != self.avatar)
     }
 
     /// 写成交给 HHH 的字符串。
@@ -130,19 +128,23 @@ mod tests {
         assert!(!format!("{credential:?}").contains(&text[text.len() - 20..]), "Debug 不带私钥");
     }
 
-    // 第三阶段：头像与“发过的个人资料”是可选字段——不带时与第二阶段的凭据一字不差，带了照样读回；头像换了才要再发。
+    // 头像与“发过的个人资料”是可选字段——不带时与第二阶段的凭据一字不差；旧版存的（只有头像地址）照样读回；
+    // 新版记的 HHH 头像摘要（契约 friend-im v6）照样读回。
     #[test]
-    fn the_avatar_fields_are_optional_and_say_when_to_announce() {
+    fn the_avatar_fields_are_optional_and_old_credentials_still_read() {
         let plain = Credential::new("https://im.example.com", "u", "台式机", Credentials::generate());
         let text = plain.encode();
         assert!(!text.contains("avatar") && !text.contains("announced"), "{text}");
-        assert!(plain.profile_outdated(), "从没发过");
-        let mut with = plain.clone().with_avatar(Some("https://cdn.example.com/a.png"));
-        assert!(with.profile_outdated());
-        with.announced = Some(Announced { avatar: with.avatar.clone() });
-        assert!(!with.profile_outdated(), "发过同一个");
-        let back = Credential::decode(&with.encode()).unwrap();
-        assert_eq!((back.avatar, back.announced), (with.avatar.clone(), with.announced.clone()));
+        let mut old = plain.clone().with_avatar(Some("https://cdn.example.com/a.png"));
+        old.announced = Some(Announced { avatar: old.avatar.clone(), photo: None });
+        let mut json: serde_json::Value = serde_json::from_str(&old.encode()).unwrap();
+        assert!(json["announced"].get("photo").is_none(), "没发过 HHH 头像时不写 photo");
+        json["announced"] = serde_json::json!({ "avatar": "https://cdn.example.com/a.png" });
+        let back = Credential::decode(&json.to_string()).unwrap();
+        assert_eq!(back.announced, old.announced, "旧版存的读得回");
+        let mut new = plain.clone();
+        new.announced = Some(Announced { avatar: None, photo: Some("ab".repeat(32)) });
+        assert_eq!(Credential::decode(&new.encode()).unwrap().announced, new.announced);
         assert!(plain.with_avatar(Some("http://insecure/a.png")).avatar.is_none(), "只收 https");
     }
 }

@@ -48,7 +48,7 @@ iPhone / iPad 上 HHH 在 App 里跑插件的 WASM 组件（`wasm32-wasip2`，`s
 | `publisher`、`homepage` | 发布者、主页 |
 | `imType` | 和别的插件是同一种 IM 时写成同一个值（同一种同一时间只用一个）；不写自成一类 |
 | `source` | 更新来源（GitHub / GitLab / 网址），HHH 只从这里检查、下载新版本 |
-| `minHost` | 需要的最低 HHH 版本（可选） |
+| `minHost` | 不用自己写：打包工具按 `Cargo.lock` 里锁定的协议包写“需要的 IM SDK 版本”（hhh-im-sdk 0.10.0 起） |
 
 ## 改完必须
 
