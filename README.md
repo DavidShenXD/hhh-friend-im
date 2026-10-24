@@ -70,7 +70,7 @@ iPhone / iPad 的包是 WASM 组件（HHH 的 iOS 版在 App 里解释执行，�
 WASI_SDK_PATH=<wasi-sdk 目录> scripts/pack-ios.sh   # 出 dist/friend-im-<版本>-wasm32-wasip2.hhhim，写进同一份版本索引
 ```
 
-在 HHH 里试：设置 → IM → 添加 IM → 文件夹，选 `dist/stage`。发版本按 [发版本规范](https://github.com/MagicLizi/hhh-im-sdk/blob/main/docs/release.md)。
+在 HHH 里试：设置 → IM → 添加 IM → 文件夹，选 `dist/stage`。发版本在私有中控仓库 `MagicLizi/hhh-release` 里统一做（编全部系统、建草稿、签名、转正式），步骤见「发版本」skill；规矩见 [发版本规范](https://github.com/MagicLizi/hhh-im-sdk/blob/main/docs/release.md)。
 
 ## 许可证
 
