@@ -59,7 +59,11 @@ iPhone / iPad 上 HHH 在 App 里跑插件的 WASM 组件（`wasm32-wasip2`，`s
 
 ## 发版本
 
-只按发版本规范：改 `version` → 打标签 `v<版本>` 推上去 → `scripts/pack` 带上 `--publish`（`pack.ps1 -Publish`）。
-标签与 Release 标题都只用 `v<版本>`（例如 `v0.3.14`），必须完全一致，不拼接清单的 `name`、`Cindy IM` 或其他前后缀。
-打包工具默认以标签作为标题，不要另行覆盖为产品名加版本号；发布后读回 Release 核对标题，不一致时只修正标题并再次核对。
-令牌只放环境变量，不写进任何文件，也不要贴进对话或提交。用「发版本」skill。
+发布只在私有中控仓库 `MagicLizi/hhh-release` 里做，用「发版本」skill：
+
+1. 改 `version`（清单 `hhh-im-provider.json` 与 `Cargo.toml`），写 `notes.md`，开 PR 合进 main；PR 上的 `hhh-plugin` 检查要全部通过。不用自己打标签。
+2. 维护者在 hhh-release 运行「插件发布 ① 编译并建草稿」，核对结果后运行「插件发布 ② 签名并转正式」。
+
+- 要出哪些系统写在 `.github/hhh-plugin.json`；`.github/workflows/hhh-plugin.yml` 与 `.github/hhh-ci/` 由 hhh-release 统一维护，不在这里直接改。
+- 官方私钥只在 hhh-release 的 Secrets 里，**永远不进这个仓库**：不复制进来，不写进脚本或配置，也不贴进对话。
+- 标签与 Release 标题都只用 `v<版本>`（例如 `v0.3.14`），转正式时自动如此；不要另改成产品名加版本号。

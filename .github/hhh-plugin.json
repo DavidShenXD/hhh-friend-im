@@ -1,0 +1,4 @@
+{
+  "targets": ["windows-x64", "macos-arm64", "macos-x64", "wasm32-wasip2"],
+  "cargoArgs": ["--bin", "friend-im"]
+}
