@@ -69,6 +69,8 @@ pub(crate) struct Server {
     pub(crate) avatars: profile::Avatars,
     /// 宿主交来的本机用户头像（`account/avatar`，契约 provider-protocol v35）；只在内存里，上线的账号共用这一份。
     pub(crate) photo: Arc<std::sync::Mutex<Option<profile::HostPhoto>>>,
+    /// 往各会话发头像一次只走一轮（宿主交头像与刚上线补发会同时来），后一轮等前一轮发完再看还要不要发。
+    pub(crate) announcing: tokio::sync::Mutex<()>,
     /// 正在处理的宿主请求（编号 → 任务），`$/cancel` 用。
     tasks: std::sync::Mutex<HashMap<String, AbortHandle>>,
 }
@@ -158,6 +160,7 @@ impl Server {
                 server_url: std::sync::Mutex::new(None),
                 avatars: profile::Avatars::default(),
                 photo: Arc::default(),
+                announcing: tokio::sync::Mutex::new(()),
                 tasks: std::sync::Mutex::new(HashMap::new()),
             }),
             writes,
