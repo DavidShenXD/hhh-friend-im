@@ -349,11 +349,13 @@ impl Server {
 
     /// 宿主交来的头像和上次发出去的不一样，就往自己在的每个会话传一份加密头像、发一条带它的个人资料，发完记下摘要并存
     /// 凭据（契约 friend-im v6 H1、H2）。借来的凭据不发；还没收到头像不发；没连上、发不出去就停下，下次上线或换头像再发。
+    /// 一次只发一轮（[`Server::announcing`]）：同时来的第二轮等第一轮记下摘要后再比，同一张不再发第二遍。
     pub(crate) async fn announce_photo(&self, live: &Live) {
         if live.read_only {
             tracing::info!("凭据是借来的，不往会话里发个人资料");
             return;
         }
+        let _turn = self.announcing.lock().await;
         let Some(photo) = self.photo.lock().expect("头像锁中毒").clone() else {
             return;
         };

@@ -14,7 +14,7 @@ use friend_im_client::core::conv::{ConvKind, RemoveReason, Via};
 use friend_im_client::core::file::FileRef;
 use friend_im_client::core::ids::{FileId, MsgId, Uid};
 use friend_im_client::core::message::{Content, Part};
-use friend_im_client::{ConvNotice, Message, Notice};
+use friend_im_client::{ConvNotice, HistoryItem, Message, Notice};
 use hhh_im_protocol::types::{
     Block, Message as Wire, Outgoing, PersonKind, Resource, ResourceKind, Sender, SenderKind,
 };
@@ -191,6 +191,17 @@ pub(crate) fn notice_text(notice: &Notice, names: &Names, me: &Uid) -> Option<St
         ConvNotice::ProfileChanged => format!("{author} 修改了群资料"),
         ConvNotice::Rotated | ConvNotice::InviteCreated { .. } | ConvNotice::InviteRevoked { .. } => return None,
     })
+}
+
+/// 翻到的一项算不算“有人发了消息”（会话发现用，协议 `conversations/recentActivity`）：算的话给它的时间与发的人。
+/// 只算翻历史时给人看的新内容——普通消息、解不开的那条、给人看的系统提示；个人资料、撤回、换钥匙这些不给人看的不算，
+/// 已经撤回、只剩“已撤回”的那条也不算新消息。
+pub(crate) fn activity_of<'a>(item: &'a HistoryItem, me: &Uid) -> Option<(i64, &'a Uid)> {
+    match item {
+        HistoryItem::Message(m) => matches!(m.content, Some(Content::Post { .. })).then_some((m.ts_ms, &m.sender)),
+        HistoryItem::Rejected { ts_ms, sender, .. } => Some((*ts_ms, sender)),
+        HistoryItem::Notice(n) => notice_text(n, &Names::new(), me).map(|_| (n.ctime_ms, &n.author)),
+    }
 }
 
 /// 系统提示要用到的账号（作者、成员）。

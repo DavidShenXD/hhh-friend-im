@@ -10,7 +10,9 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use friend_im_client::core::ids::{ConvId, MsgId, Uid};
+use friend_im_client::core::limits::HISTORY_PAGE_MAX;
 use friend_im_client::core::message::{Content, Part};
+use friend_im_client::core::wire::ConvActivity;
 use friend_im_client::{ClientError, HistoryItem};
 use hhh_im_protocol::method::{
     ActivityItem, ConversationsGetParams, ConversationsListParams, MembersParams,
@@ -29,6 +31,9 @@ use super::{Server, errors, push};
 
 /// 记住多少次发送的结果（同一个 `operationId` 再来时回同一个结果）。
 const SENDS_MAX: usize = 1000;
+
+/// 会话发现时一个会话至多翻几页历史（一页 [`HISTORY_PAGE_MAX`] 条，平时一页就到头）。
+const ACTIVITY_PAGES: usize = 3;
 
 type SendResult = Result<Value, RpcError>;
 
@@ -275,7 +280,8 @@ impl Server {
         Ok(to_value(PeopleGetResult { found, missing }))
     }
 
-    /// `conversations/recentActivity`：服务器一次给全（至多 1000 个会话），只有编号与时间。
+    /// `conversations/recentActivity`：服务器一次给全（至多 1000 个会话），只有编号与时间。服务器解不开内容，个人资料这类
+    /// 不给人看的也算进去，所以再翻一下这段历史，只报有人发了消息的（[`Seen`]）；私聊只有别人发过时才带对方编号。
     pub(crate) async fn conversations_recent_activity(
         &self,
         params: RecentActivityParams,
@@ -291,15 +297,30 @@ impl Server {
             let Ok(conversation) = live.conversation(&item.conv).await else {
                 continue;
             };
+            let seen = match seen_since(&live, &item, params.since_ms).await {
+                Ok(Some(seen)) => seen,
+                Ok(None) => {
+                    tracing::debug!(conv = %item.conv, "这段时间只有不给人看的（个人资料、撤回、换钥匙），不算有新消息");
+                    continue;
+                }
+                Err(error @ (ClientError::Disconnected | ClientError::Timeout)) => {
+                    return Err(errors::client(&error));
+                }
+                Err(error) => {
+                    tracing::info!(conv = %item.conv, %error, "这段历史翻不了，按服务器给的算");
+                    Seen::reported(&item)
+                }
+            };
             items.push(ActivityItem {
                 conversation: None,
                 conversation_id: item.conv.to_string(),
                 kind: conversation.kind,
-                first_ms: item.first_ms,
-                latest_ms: item.latest_ms,
-                peer_id: conversation.peer,
+                first_ms: seen.first_ms,
+                latest_ms: seen.latest_ms,
+                peer_id: conversation.peer.filter(|_| seen.others),
             });
         }
+        items.sort_by_key(|item| std::cmp::Reverse(item.latest_ms));
         Ok(to_value(RecentActivityResult {
             items,
             complete: true,
@@ -553,6 +574,76 @@ fn translate_page_max() -> usize {
     super::declare::PAGE_MAX as usize
 }
 
+/// 一个会话在一段时间里有人发的消息（[`translate::activity_of`]）：最早、最新一条的时间，其中有没有别人发的。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Seen {
+    first_ms: i64,
+    latest_ms: i64,
+    others: bool,
+}
+
+impl Seen {
+    /// 服务器报的原样（看不了历史时用）：当作别人发的，宁可多报一次也不漏掉真消息。
+    fn reported(item: &ConvActivity) -> Self {
+        Self {
+            first_ms: item.first_ms,
+            latest_ms: item.latest_ms,
+            others: true,
+        }
+    }
+
+    /// 把翻到的一页记进来。
+    fn add(seen: Option<Self>, items: &[HistoryItem], me: &Uid) -> Option<Self> {
+        items
+            .iter()
+            .filter_map(|item| translate::activity_of(item, me))
+            .fold(seen, |seen, (at, sender)| {
+                let others = sender != me;
+                Some(match seen {
+                    None => Self {
+                        first_ms: at,
+                        latest_ms: at,
+                        others,
+                    },
+                    Some(s) => Self {
+                        first_ms: s.first_ms.min(at),
+                        latest_ms: s.latest_ms.max(at),
+                        others: s.others || others,
+                    },
+                })
+            })
+    }
+}
+
+/// 服务器说这个会话 `since_ms` 起有动静：从新往旧翻这段历史，看其中有没有人发的消息（与翻历史同一套“给不给人看”）。
+/// 翻满 [`ACTIVITY_PAGES`] 页还没到头时，最早一条按服务器给的算（宁可多算未读）；一条给人看的都没翻到，就按服务器给的报。
+async fn seen_since(
+    live: &Live,
+    item: &ConvActivity,
+    since_ms: i64,
+) -> Result<Option<Seen>, ClientError> {
+    let mut seen = None;
+    let mut before = None;
+    for _ in 0..ACTIVITY_PAGES {
+        let page = live
+            .client
+            .history_in(&item.conv, before, HISTORY_PAGE_MAX, Some(since_ms), None)
+            .await?;
+        seen = Seen::add(seen, &page.items, &live.me);
+        before = page.items.iter().map(HistoryItem::log).min();
+        if !page.more || before.is_none() {
+            return Ok(seen);
+        }
+    }
+    Ok(Some(match seen {
+        Some(seen) => Seen {
+            first_ms: seen.first_ms.min(item.first_ms),
+            ..seen
+        },
+        None => Seen::reported(item),
+    }))
+}
+
 /// 一页历史（客户端库给的，从新到旧）→ 协议的一页（从旧到新）。消息与系统提示合起来不超过 `limit` 条：
 /// 多出来的（更早的）留给下一页，游标停在留下的最早一条。撤回动作本身、不用给人看的提示不占条数。
 pub(crate) async fn history_page(
@@ -617,6 +708,119 @@ pub(crate) async fn history_page(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use friend_im_client::core::bytes::Fixed;
+    use friend_im_client::core::ids::{DeviceId, InviteId};
+    use friend_im_client::{ConvNotice, Message, Notice};
+
+    fn uid(n: u8) -> Uid {
+        Uid::from_raw([n; 16])
+    }
+
+    fn message(log: u64, ts_ms: i64, sender: u8, content: Option<Content>) -> HistoryItem {
+        HistoryItem::Message(Message {
+            conv: ConvId::from_raw([1; 16]),
+            id: MsgId::from_raw([log as u8; 16]),
+            log,
+            ts_ms,
+            sender: uid(sender),
+            sender_eldest: Fixed([0; 32]),
+            device: DeviceId::from_raw([sender; 16]),
+            ctime_ms: ts_ms,
+            content,
+        })
+    }
+
+    fn post(log: u64, ts_ms: i64, sender: u8) -> HistoryItem {
+        let parts = vec![Part::Text {
+            text: "在吗".into(),
+        }];
+        message(
+            log,
+            ts_ms,
+            sender,
+            Some(Content::Post {
+                parts,
+                reply_to: None,
+            }),
+        )
+    }
+
+    fn notice(log: u64, ctime_ms: i64, author: u8, change: ConvNotice) -> HistoryItem {
+        HistoryItem::Notice(Notice {
+            conv: ConvId::from_raw([1; 16]),
+            log,
+            ctime_ms,
+            author: uid(author),
+            change,
+        })
+    }
+
+    #[test]
+    fn what_nobody_sees_is_not_someone_sending_a_message() {
+        // 自己的电脑发的头像资料、撤回、换钥匙，以及被撤回只剩“已撤回”的那条：删掉的会话不该因为它们回来。
+        let me = uid(1);
+        let profile = Content::Profile {
+            avatar: None,
+            photo: None,
+        };
+        let recall = Content::Recall {
+            target: MsgId::from_raw([9; 16]),
+        };
+        let items = [
+            message(14, 140, 1, Some(profile.clone())),
+            message(13, 130, 2, Some(profile)),
+            message(12, 120, 2, Some(recall)),
+            message(11, 110, 2, None),
+            notice(10, 100, 2, ConvNotice::Rotated),
+        ];
+        assert_eq!(Seen::add(None, &items, &me), None);
+    }
+
+    #[test]
+    fn messages_unreadable_ones_and_shown_notices_count_with_who_sent_them() {
+        let me = uid(1);
+        // 只有自己发的：算有消息，但不是别人发的（私聊不带对方编号）。
+        let mine = [post(5, 500, 1)];
+        assert_eq!(
+            Seen::add(None, &mine, &me),
+            Some(Seen {
+                first_ms: 500,
+                latest_ms: 500,
+                others: false
+            })
+        );
+        // 对方的一条、解不开的一条、对方签的“你重置了账号”：时间取最早与最新，有别人发的。
+        let theirs = [
+            post(8, 800, 2),
+            HistoryItem::Rejected {
+                id: MsgId::from_raw([7; 16]),
+                log: 7,
+                ts_ms: 700,
+                sender: uid(2),
+                reason: "解不开".into(),
+            },
+            notice(6, 600, 2, ConvNotice::MemberReset { uid: me.clone() }),
+        ];
+        let seen = Seen::add(Seen::add(None, &mine, &me), &theirs, &me);
+        assert_eq!(
+            seen,
+            Some(Seen {
+                first_ms: 500,
+                latest_ms: 800,
+                others: true
+            })
+        );
+        // 群邀请链接的发出不给人看，不算。
+        let invite = notice(
+            9,
+            900,
+            2,
+            ConvNotice::InviteCreated {
+                invite: InviteId::from_raw([4; 16]),
+            },
+        );
+        assert_eq!(Seen::add(seen, &[invite], &me), seen);
+    }
 
     #[test]
     fn send_ids_are_stable_per_account_and_operation() {
